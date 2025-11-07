@@ -1,0 +1,87 @@
+{
+  "name": "native-audio-playback",
+  "version": "0.1.0",
+  "description": "High-performance native audio playback for Node.js. Built with Rust and rodio, supporting WAV, MP3, FLAC, OGG formats with cross-platform compatibility.",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "test": "node examples/usage.js",
+    "test:audio": "node examples/test_playback.js",
+    "install": "node scripts/install.js",
+    "publish": "npm publish",
+    "publish:dry": "npm publish --dry-run"
+  },
+  "napi": {
+    "name": "miniaudio-ffi",
+    "triples": {
+      "defaults": true,
+      "additional": [
+        "x86_64-pc-windows-msvc",
+        "i686-pc-windows-msvc",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-gnu"
+      ]
+    }
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.0"
+  },
+  "engines": {
+    "node": ">= 14"
+  },
+  "keywords": [
+    "audio",
+    "playback",
+    "music",
+    "sound",
+    "native",
+    "rust",
+    "cross-platform",
+    "wav",
+    "mp3",
+    "flac",
+    "ogg",
+    "multimedia",
+    "speakers",
+    "headphones",
+    "high-performance"
+  ],
+  "author": {
+    "name": "Audio Developer",
+    "email": "audio@example.com",
+    "url": "https://github.com/audio-dev"
+  },
+  "license": "MIT",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "LICENSE",
+    "*.node"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/audio-dev/native-audio-playback.git"
+  },
+  "bugs": {
+    "url": "https://github.com/audio-dev/native-audio-playback/issues"
+  },
+  "homepage": "https://github.com/audio-dev/native-audio-playback#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "optionalDependencies": {
+    "miniaudio-ffi-win32-x64-msvc": "0.1.0",
+    "miniaudio-ffi-darwin-x64": "0.1.0",
+    "miniaudio-ffi-linux-x64-gnu": "0.1.0",
+    "miniaudio-ffi-win32-ia32-msvc": "0.1.0",
+    "miniaudio-ffi-darwin-arm64": "0.1.0",
+    "miniaudio-ffi-linux-x64-musl": "0.1.0",
+    "miniaudio-ffi-linux-arm64-gnu": "0.1.0"
+  }
+}
