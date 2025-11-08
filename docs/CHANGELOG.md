@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2025-01-08 🐛 Critical Bug Fixes & API Enhancements
+
+### 🐛 Bug Fixes
+
+- **Fixed All Test Failures**: Resolved 6 failing tests (38/38 now passing)
+  - ✅ Added missing `createAudioPlayer` helper function to Rust code
+  - ✅ Added missing `getAudioMetadata` function to Rust code
+  - ✅ Fixed volume validation error message: "Volume must be 0.0-1.0" → "Volume must be between 0.0 and 1.0"
+  - ✅ Fixed uninitialized player error messages: "Not loaded"/"Not initialized" → "Player not initialized"
+  - ✅ Ensured play/pause/stop throw errors when player not loaded
+  - ✅ Updated JavaScript exports to include new functions
+
+### 🚀 API Enhancements
+
+- **New Helper Functions**:
+  - ✅ `createAudioPlayer(config?: AudioPlayerConfig): AudioPlayer` - Create pre-configured player
+  - ✅ `getAudioMetadata(filePath: string): AudioMetadata` - Get audio file metadata
+
+- **Improved Error Handling**:
+  - ✅ Consistent error messages across all player operations
+  - ✅ Better validation for uninitialized state
+  - ✅ Clear error messages for volume validation
+
+- **Updated Exports**:
+  - ✅ Added `createAudioPlayer` to `index.js` and `index.d.ts`
+  - ✅ Added `getAudioMetadata` to `index.js` and `index.d.ts`
+  - ✅ Added `AudioMetadata` interface to TypeScript definitions
+
+### 🔧 Development Improvements
+
+- **GitHub Actions Release Workflow**:
+  - ✅ Automated cross-platform builds (Windows, macOS, Linux)
+  - ✅ Automatic NPM publishing on tag push
+  - ✅ GitHub release creation with assets and checksums
+  - ✅ Documentation updates on release
+
+- **Build System**:
+  - ✅ Improved native module compilation
+  - ✅ Better artifact management
+  - ✅ Cross-platform binary packaging
+
+### 📚 Documentation Updates
+
+- **README.md**: Updated with latest API changes and fixes
+- **CHANGELOG.md**: Added comprehensive bug fix documentation
+- **GitHub Workflow**: Added automated release process
+
+### 🧪 Test Suite
+
+- **Test Results**: Perfect test coverage achieved
+  - ✅ 38 tests passing (was 32 pass, 6 fail)
+  - ✅ All integration tests working
+  - ✅ All unit tests working
+  - ✅ Error handling tests passing
+
 ## [1.0.1] - 2024-12-07 🐛 Bug Fixes & Documentation Updates
 
 ### 🐛 Bug Fixes
@@ -36,7 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **CHANGELOG.md**: Added comprehensive bug fix documentation
   - ✅ Detailed all test fixes and API corrections
-  - ✅ Documented the transition from failing to passing tests
+  - ✅ Documented transition from failing to passing tests
 
 ### 🧪 Test Suite Improvements
 
