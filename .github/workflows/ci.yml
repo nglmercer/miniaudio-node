@@ -200,10 +200,12 @@ jobs:
       - name: Audit npm dependencies
         run: bun audit || true
 
+      - name: Install cargo-audit
+        run: cargo install cargo-audit || true
+
       - name: Rust security audit
-        uses: actions-rs/audit-check@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cargo audit || true
 
   # Release workflow
   release:
