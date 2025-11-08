@@ -1,0 +1,141 @@
+name: CI - Windows
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  RUST_TOOLCHAIN: stable
+  NODE_VERSION: '20'
+
+jobs:
+  rust-tests-windows:
+    name: Rust Tests (Windows)
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: windows-latest-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            windows-latest-cargo-
+
+      - name: Check Rust formatting
+        run: |
+          cargo fmt --all -- --check
+
+      - name: Rust linting
+        run: |
+          cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run Rust tests
+        run: |
+          cargo test --verbose
+
+  node-tests-windows:
+    name: Node.js Tests (Windows)
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        node-version: [18, 20]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install Bun
+        run: |
+          powershell -c "irm bun.sh/install.ps1 | iex"
+          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            node_modules
+            .bun-cache
+            ~/.npm
+          key: windows-latest-${{ matrix.node-version }}-deps-${{ hashFiles('package.json', 'bun.lockb') }}
+          restore-keys: |
+            windows-latest-${{ matrix.node-version }}-deps-
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build native module
+        run: bun run build
+
+      - name: Run tests
+        run: bun test
+
+  build-windows:
+    name: Build Windows Binaries
+    needs: [rust-tests-windows, node-tests-windows]
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            artifact_name: miniaudio_node.win32-x64-msvc.node
+          - target: i686-pc-windows-msvc
+            artifact_name: miniaudio_node.win32-ia32-msvc.node
+          - target: aarch64-pc-windows-msvc
+            artifact_name: miniaudio_node.win32-arm64-msvc.node
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: windows-latest-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            windows-latest-${{ matrix.target }}-cargo-
+
+      - name: Build native binary
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/miniaudio_node.dll dist/${{ matrix.artifact_name }} || true
+          cp target/${{ matrix.target }}/release/miniaudio_node.lib dist/ || true
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/

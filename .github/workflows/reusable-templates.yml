@@ -1,0 +1,103 @@
+# Reusable workflow templates for miniaudio-node
+
+# This file contains reusable workflow components that can be called from other workflows
+
+name: Reusable Templates
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        required: true
+        type: string
+      target:
+        required: false
+        type: string
+      node-version:
+        required: false
+        type: string
+      artifact-name:
+        required: false
+        type: string
+
+env:
+  RUST_TOOLCHAIN: stable
+  NODE_VERSION: '20'
+
+jobs:
+  setup-rust:
+    name: Setup Rust (${{ inputs.os }})
+    runs-on: ${{ inputs.os }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies (Linux)
+        if: ${{ startsWith(inputs.os, 'ubuntu') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libpkgconf-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+          targets: ${{ inputs.target || '' }}
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ inputs.os }}-${{ inputs.target || 'default' }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ inputs.os }}-${{ inputs.target || 'default' }}-cargo-
+
+  setup-node:
+    name: Setup Node.js (${{ inputs.os }}, Node ${{ inputs.node-version }})
+    runs-on: ${{ inputs.os }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies (Linux)
+        if: ${{ startsWith(inputs.os, 'ubuntu') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libpkgconf-dev
+
+      - name: Setup Node.js ${{ inputs.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install Bun (Unix)
+        if: ${{ !startsWith(inputs.os, 'windows') }}
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+
+      - name: Install Bun (Windows)
+        if: ${{ startsWith(inputs.os, 'windows') }}
+        run: |
+          powershell -c "irm bun.sh/install.ps1 | iex"
+          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            node_modules
+            .bun-cache
+            ~/.npm
+          key: ${{ inputs.os }}-${{ inputs.node-version }}-deps-${{ hashFiles('package.json', 'bun.lockb') }}
+          restore-keys: |
+            ${{ inputs.os }}-${{ inputs.node-version }}-deps-
+
+      - name: Install dependencies
+        run: bun install

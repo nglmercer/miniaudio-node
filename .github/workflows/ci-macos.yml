@@ -1,0 +1,139 @@
+name: CI - macOS
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  RUST_TOOLCHAIN: stable
+  NODE_VERSION: '20'
+
+jobs:
+  rust-tests-macos:
+    name: Rust Tests (macOS)
+    runs-on: macos-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: macos-latest-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            macos-latest-cargo-
+
+      - name: Check Rust formatting
+        run: |
+          cargo fmt --all -- --check
+
+      - name: Rust linting
+        run: |
+          cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run Rust tests
+        run: |
+          cargo test --verbose
+
+  node-tests-macos:
+    name: Node.js Tests (macOS)
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        node-version: [18, 20]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install Bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            node_modules
+            .bun-cache
+            ~/.npm
+          key: macos-latest-${{ matrix.node-version }}-deps-${{ hashFiles('package.json', 'bun.lockb') }}
+          restore-keys: |
+            macos-latest-${{ matrix.node-version }}-deps-
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build native module
+        run: bun run build
+
+      - name: Run tests
+        run: bun test
+
+  build-macos:
+    name: Build macOS Binaries
+    needs: [rust-tests-macos, node-tests-macos]
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            artifact_name: miniaudio_node.darwin-x64.node
+          - target: aarch64-apple-darwin
+            artifact_name: miniaudio_node.darwin-arm64.node
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: macos-latest-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            macos-latest-${{ matrix.target }}-cargo-
+
+      - name: Build native binary
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/libminiaudio_node.* dist/ || true
+          cp target/${{ matrix.target }}/release/miniaudio_node.* dist/${{ matrix.artifact_name }} || true
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/
