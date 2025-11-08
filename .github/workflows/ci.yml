@@ -57,9 +57,9 @@ jobs:
           sudo apt-get install -y libasound2-dev libpkgconf-dev
 
       - name: Setup Bun
-        run: |
-          curl -fsSL https://bun.sh/install | bash
-          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
 
       - name: Install dependencies
         run: bun install
@@ -85,9 +85,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Bun
-        run: |
-          curl -fsSL https://bun.sh/install | bash
-          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
 
       - name: Install dependencies
         run: bun install

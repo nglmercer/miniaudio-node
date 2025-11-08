@@ -65,9 +65,9 @@ jobs:
           node-version: ${{ matrix.node-version }}
 
       - name: Install Bun
-        run: |
-          curl -fsSL https://bun.sh/install | bash
-          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
 
       - name: Cache dependencies
         uses: actions/cache@v3
@@ -76,7 +76,7 @@ jobs:
             node_modules
             .bun-cache
             ~/.npm
-          key: macos-latest-${{ matrix.node-version }}-deps-${{ hashFiles('package.json', 'bun.lockb') }}
+          key: macos-latest-${{ matrix.node-version }}-deps-${{ hashFiles('package.json', 'bun.lock') }}
           restore-keys: |
             macos-latest-${{ matrix.node-version }}-deps-
 

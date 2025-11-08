@@ -75,9 +75,9 @@ jobs:
           node-version: ${{ matrix.node-version }}
 
       - name: Install Bun
-        run: |
-          curl -fsSL https://bun.sh/install | bash
-          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
 
       - name: Cache dependencies
         uses: actions/cache@v3
@@ -86,7 +86,7 @@ jobs:
             node_modules
             .bun-cache
             ~/.npm
-          key: ubuntu-latest-${{ matrix.node-version }}-deps-${{ hashFiles('package.json', 'bun.lockb') }}
+          key: ubuntu-latest-${{ matrix.node-version }}-deps-${{ hashFiles('package.json', 'bun.lock') }}
           restore-keys: |
             ubuntu-latest-${{ matrix.node-version }}-deps-
 
@@ -98,14 +98,6 @@ jobs:
 
       - name: Run tests
         run: bun test
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
-        with:
-          file: ./coverage/lcov.info
-          flags: unittests
-          name: codecov-umbrella
-        if: matrix.node-version == '20'
 
   build-linux:
     name: Build Linux Binaries
