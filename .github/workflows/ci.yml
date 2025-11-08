@@ -1,0 +1,365 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  release:
+    types: [published]
+
+env:
+  RUST_TOOLCHAIN: stable
+  NODE_VERSION: '20'
+  BUN_VERSION: '1.0.0'
+
+jobs:
+  # Rust Native Module Tests
+  rust-tests:
+    name: Rust Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('native/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check Rust formatting
+        run: |
+          cd native
+          cargo fmt --all -- --check
+
+      - name: Rust linting
+        run: |
+          cd native
+          cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run Rust tests
+        run: |
+          cd native
+          cargo test --verbose
+
+  # TypeScript/JavaScript Tests
+  node-tests:
+    name: Node.js/Bun Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node-version: [18, 20]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install Bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            node_modules
+            .bun-cache
+            ~/.npm
+          key: ${{ runner.os }}-${{ matrix.node-version }}-deps-${{ hashFiles('package.json', 'bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.node-version }}-deps-
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build native module
+        run: bun run build:native
+
+      - name: Run TypeScript type checking
+        run: bun run typecheck
+
+      - name: Run ESLint
+        run: bun run lint
+
+      - name: Check formatting
+        run: bun run format:check
+
+      - name: Run unit tests
+        run: bun run test:unit
+
+      - name: Run integration tests
+        run: bun run test:integration
+
+      - name: Generate coverage report
+        run: bun run test:coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage/lcov.info
+          flags: unittests
+          name: codecov-umbrella
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '20'
+
+  # Build and Test Cross-Platform Binaries
+  build-binaries:
+    name: Build Native Binaries
+    needs: [rust-tests, node-tests]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: miniaudio-node.linux-x64-gnu.node
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact_name: miniaudio-node.linux-x64-musl.node
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: miniaudio-node.linux-arm64-gnu.node
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: miniaudio-node.win32-x64-msvc.node
+          - os: windows-latest
+            target: i686-pc-windows-msvc
+            artifact_name: miniaudio-node.win32-ia32-msvc.node
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: miniaudio-node.darwin-x64.node
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: miniaudio-node.darwin-arm64.node
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/target/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('native/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Build native binary
+        run: |
+          cd native
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p dist
+          cp native/target/${{ matrix.target }}/release/miniaudio_ffi.* dist/${{ matrix.artifact_name }}
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/${{ matrix.artifact_name }}
+
+  # Build and test final package
+  build-package:
+    name: Build Package
+    needs: [rust-tests, node-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v3
+        with:
+          path: dist/
+
+      - name: Prepare binaries in dist
+        run: |
+          find dist/ -name "*.node" -exec cp {} dist/ \;
+          find dist/ -type d -mindepth 1 -maxdepth 1 -exec rm -rf {} \;
+
+      - name: Build TypeScript
+        run: bun run build:ts
+
+      - name: Build complete package
+        run: bun run build
+
+      - name: Run final tests
+        run: bun test
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: package-${{ github.sha }}
+          path: dist/
+
+  # Security and dependency checks
+  security:
+    name: Security Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Audit npm dependencies
+        run: bun audit
+
+      - name: Rust security audit
+        uses: actions-rs/audit-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Performance benchmarks
+  benchmark:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build project
+        run: bun run build
+
+      - name: Run benchmarks
+        run: bun run bench
+
+      - name: Store benchmark results
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: 'cargo'
+          output-file-path: target/criterion/reports/index.html
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+
+  # Release workflow
+  release:
+    name: Release
+    needs: [build-binaries, build-package, security]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install Bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v3
+        with:
+          path: dist/
+
+      - name: Prepare binaries in dist
+        run: |
+          find dist/ -name "*.node" -exec cp {} dist/ \;
+          find dist/ -type d -mindepth 1 -maxdepth 1 -exec rm -rf {} \;
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build release package
+        run: bun run build:release
+
+      - name: Publish to npm
+        run: |
+          cd dist
+          npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # Documentation deployment
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build documentation
+        run: bun run docs:build
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs/.vitepress/dist

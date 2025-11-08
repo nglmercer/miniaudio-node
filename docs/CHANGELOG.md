@@ -1,4 +1,4 @@
-# 🚀 native-audio-playback Changelog
+# 🚀 miniaudio-node Changelog
 
 All notable changes to this project will be documented in this file.
 
@@ -124,7 +124,7 @@ If you were using the previous `miniaudio-ffi` name:
 npm uninstall miniaudio-ffi
 
 # New package name (recommended)
-npm install native-audio-playback
+npm install miniaudio-node
 ```
 
 The API remains exactly the same - only the package name has changed for better discoverability.

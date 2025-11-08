@@ -1,18 +1,42 @@
-# Rust
-target/
-Cargo.lock
-**/*.rs.bk
-*.pdb
-
-# Node.js
+# Dependencies
 node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+coverage/
+test-results/
+playwright-report/
+
+# Native build artifacts
+native/target/
+*.node
+*.dll
+*.so
+*.dylib
+*.pdb
+*.obj
+*.lib
+*.exp
+*.lib
+*.ilk
+
+# Bun specific
+.bun-cache/
+bun.lockb
+
+# Logs
+logs/
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
+pnpm-debug.log*
 
 # Runtime data
-pids
+pids/
 *.pid
 *.seed
 *.pid.lock
@@ -24,23 +48,8 @@ coverage/
 # nyc test coverage
 .nyc_output
 
-# Grunt intermediate storage (https://gruntjs.com/creating-plugins#storing-task-files)
-.grunt
-
-# Bower dependency directory (https://bower.io/)
-bower_components
-
-# node-waf configuration
-.lock-wscript
-
-# Compiled binary addons (https://nodejs.org/api/addons.html)
-build/Release
-
 # Dependency directories
 jspm_packages/
-
-# TypeScript v1 declaration files
-typings/
 
 # TypeScript cache
 *.tsbuildinfo
@@ -50,12 +59,6 @@ typings/
 
 # Optional eslint cache
 .eslintcache
-
-# Microbundle cache
-.rpt2_cache/
-.rts2_cache_cjs/
-.rts2_cache_es/
-.rts2_cache_umd/
 
 # Optional REPL history
 .node_repl_history
@@ -69,8 +72,13 @@ typings/
 # dotenv environment variables file
 .env
 .env.test
+.env.production
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
-# parcel-bundler cache (https://parceljs.org/)
+# parcel-bundler cache
 .cache
 .parcel-cache
 
@@ -79,7 +87,6 @@ typings/
 
 # Nuxt.js build / generate output
 .nuxt
-dist
 
 # Gatsby files
 .cache/
@@ -93,24 +100,36 @@ public
 tmp/
 temp/
 
-# Logs
-logs
-*.log
-
 # Editor directories and files
 .vscode/
+!.vscode/extensions.json
 .idea/
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+*.swp
+*.swo
+*~
 
 # OS generated files
-Thumbs.db
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
 ehthumbs.db
-Desktop.ini
+Thumbs.db
 
-# Native build files
-*.node
+# Package manager lock files (keep bun.lockb only)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Profiling data
+*.prof
+*.pprof
+
+# Debug files
+debug.log

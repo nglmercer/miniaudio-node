@@ -2,7 +2,7 @@ const {
   AudioPlayer,
   initializeAudio,
   getSupportedFormats,
-} = require("../miniaudio-ffi.win32-x64-msvc.node");
+} = require("../miniaudio-node.win32-x64-msvc.node");
 
 async function testAudioPlayback() {
   try {
@@ -94,11 +94,9 @@ async function testAudioPlayback() {
         console.log("Duration (placeholder):", player.getDuration());
         console.log("Current time (placeholder):", player.getCurrentTime());
       }, 5500);
-
     } catch (loadError) {
       console.error("❌ Failed to load audio file:", loadError.message);
     }
-
   } catch (error) {
     console.error("❌ Error during test:", error.message);
   }

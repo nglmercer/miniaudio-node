@@ -1,0 +1,67 @@
+[package]
+name = "miniaudio_ffi"
+version = "1.0.0"
+edition = "2021"
+authors = ["Audio Development Team <audio@example.com>"]
+description = "Rust FFI for miniaudio-node - High-performance native audio playback"
+license = "MIT"
+repository = "https://github.com/audio-dev/miniaudio-node.git"
+homepage = "https://miniaudio-node.js.org"
+keywords = ["audio", "playback", "rust", "ffi", "bun", "node"]
+categories = ["multimedia::audio", "api-bindings"]
+
+[lib]
+crate-type = ["cdylib"]
+name = "miniaudio_ffi"
+
+[dependencies]
+# Core dependencies
+napi = { version = "2.16", features = ["napi4", "serde-json"] }
+napi-derive = "2.16"
+rodio = { version = "0.17", features = ["wav", "mp3", "flac", "vorbis"] }
+
+# Error handling and utilities
+anyhow = "1.0"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async support
+tokio = { version = "1.0", features = ["rt-multi-thread", "sync"], optional = true }
+
+[build-dependencies]
+napi-build = "2.1"
+cc = "1.0"
+
+[features]
+default = []
+async = ["tokio"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+opt-level = "z"
+
+[profile.dev]
+opt-level = 0
+debug = true
+overflow-checks = true
+
+[package.metadata.napi]
+targets = [
+  "x86_64-pc-windows-msvc",
+  "i686-pc-windows-msvc",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-gnu"
+]
+
+[package.metadata.napi.custom-targets."x86_64-pc-windows-msvc"]
+dart-define = ["FLUTTER_TARGET_OS=windows"]
+
+[package.metadata.napi.custom-targets."aarch64-apple-darwin"]
+dart-define = ["FLUTTER_TARGET_OS=macos", "FLUTTER_TARGET_ARCH=arm64"]
