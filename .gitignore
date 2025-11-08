@@ -133,3 +133,6 @@ pnpm-lock.yaml
 
 # Debug files
 debug.log
+native/package.json
+native/index.js
+package-lock.json

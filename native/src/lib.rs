@@ -479,6 +479,7 @@ pub fn quick_play(file_path: String, config: Option<AudioPlayerConfig>) -> NapiR
         .unwrap_or(false);
 
     let mut player = create_audio_player(config);
+    player.load_file(file_path)?;
 
     if auto_play {
         player.play()?;

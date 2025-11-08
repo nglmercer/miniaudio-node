@@ -5,6 +5,7 @@
  * including error handling, async operations, and type safety.
  */
 
+// Import the native module directly
 const {
   AudioPlayer,
   initializeAudio,
@@ -13,21 +14,24 @@ const {
   quickPlay,
   isFormatSupported,
   getAudioMetadata,
-} = await import("../../dist/miniaudio-node.win32-x64-msvc.node");
-import { type AudioDeviceInfo } from "../../dist/index.d.ts";
+  PlaybackState,
+} = await import("../../dist/index.js");
+
+// Import types separately
+import type { AudioDeviceInfo,AudioPlayerConfig } from "../../dist/index.js";
 
 /**
  * Playlist manager class for handling multiple audio files
  */
 class PlaylistManager {
-  private player: AudioPlayer;
+  private player: any;
   private tracks: string[] = [];
   private currentTrackIndex: number = 0;
   private isPlaying: boolean = false;
   private loop: boolean = false;
 
-  constructor() {
-    this.player = createAudioPlayer();
+  constructor(options?: AudioPlayerConfig | undefined| null) {
+    this.player = createAudioPlayer(options);
   }
 
   /**
@@ -38,7 +42,8 @@ class PlaylistManager {
 
     // Validate all tracks exist and are supported
     for (const track of tracks) {
-      if (!isFormatSupported(track)) {
+      const extension = track.split(".").pop()?.toLowerCase();
+      if (!extension || !isFormatSupported(extension)) {
         throw new Error(`Unsupported format: ${track}`);
       }
 
@@ -71,8 +76,8 @@ class PlaylistManager {
     );
 
     try {
-      this.player.loadFile(currentTrack);
-      this.player.play();
+      await this.player.loadFile(currentTrack);
+      await this.player.play();
       this.isPlaying = true;
 
       // Show track metadata
@@ -140,7 +145,7 @@ class PlaylistManager {
    */
   async resume(): Promise<void> {
     if (!this.isPlaying && this.tracks.length > 0) {
-      this.player.play();
+      await this.player.play();
       this.isPlaying = true;
       this.monitorPlayback();
     }
@@ -149,8 +154,8 @@ class PlaylistManager {
   /**
    * Stop playback and reset
    */
-  stop(): void {
-    this.player.stop();
+  async stop(): Promise<void> {
+    await this.player.stop();
     this.isPlaying = false;
     this.currentTrackIndex = 0;
   }
@@ -185,7 +190,7 @@ class AudioVisualizer {
   private bars: number = 20;
   private intervalId: NodeJS.Timeout | null = null;
 
-  start(player: AudioPlayer): void {
+  start(player: any): void {
     console.log("📊 Starting audio visualizer...");
 
     this.intervalId = setInterval(() => {
@@ -218,10 +223,10 @@ class AudioVisualizer {
  * Advanced audio effects controller
  */
 class AudioEffects {
-  private player: AudioPlayer;
+  private player: any;
   private originalVolume: number = 1.0;
 
-  constructor(player: AudioPlayer) {
+  constructor(player: any) {
     this.player = player;
     this.originalVolume = player.getVolume();
   }
@@ -236,12 +241,12 @@ class AudioEffects {
     const stepDuration = duration / steps;
     const volumeIncrement = this.originalVolume / steps;
 
-    this.player.setVolume(0);
-    this.player.play();
+    await this.player.setVolume(0);
+    await this.player.play();
 
     for (let i = 1; i <= steps; i++) {
       await new Promise((resolve) => setTimeout(resolve, stepDuration));
-      this.player.setVolume(i * volumeIncrement);
+      await this.player.setVolume(i * volumeIncrement);
     }
   }
 
@@ -258,11 +263,11 @@ class AudioEffects {
 
     for (let i = 1; i <= steps; i++) {
       await new Promise((resolve) => setTimeout(resolve, stepDuration));
-      this.player.setVolume(currentVolume - i * volumeDecrement);
+      await this.player.setVolume(currentVolume - i * volumeDecrement);
     }
 
-    this.player.pause();
-    this.player.setVolume(this.originalVolume);
+    await this.player.pause();
+    await this.player.setVolume(this.originalVolume);
   }
 
   /**
@@ -277,11 +282,11 @@ class AudioEffects {
     for (let i = 0; i < steps; i++) {
       const volume =
         ((Math.sin((i / steps) * Math.PI * 2) + 1) / 2) * this.originalVolume;
-      this.player.setVolume(volume);
+      await this.player.setVolume(volume);
       await new Promise((resolve) => setTimeout(resolve, stepDuration));
     }
 
-    this.player.setVolume(this.originalVolume);
+    await this.player.setVolume(this.originalVolume);
   }
 }
 
@@ -309,11 +314,11 @@ async function runAdvancedExample(): Promise<void> {
       { volume: 0.8, autoPlay: true },
     );
     await new Promise((resolve) => setTimeout(resolve, 2000));
-    quickPlayer.stop();
+    await quickPlayer.stop();
 
     // Example 2: Playlist management
     console.log("\n🎵 Playlist Management Example");
-    const playlist = new PlaylistManager({ volume: 0.7, loop: true });
+    const playlist = new PlaylistManager({ volume: 0.7, loopPlayback: true });
 
     // Load system sounds (platform-specific)
     const systemSounds =
@@ -337,7 +342,7 @@ async function runAdvancedExample(): Promise<void> {
 
       // Let it play for a bit
       await new Promise((resolve) => setTimeout(resolve, 5000));
-      playlist.stop();
+      await playlist.stop();
     } else {
       console.log("⚠️  No system sounds found for this platform");
     }
@@ -348,7 +353,7 @@ async function runAdvancedExample(): Promise<void> {
     const effects = new AudioEffects(effectsPlayer);
 
     if (validSounds.length > 0) {
-      effectsPlayer.loadFile(validSounds[0]);
+      await effectsPlayer.loadFile(validSounds[0]);
 
       // Fade in effect
       await effects.fadeIn(2000);
@@ -367,24 +372,24 @@ async function runAdvancedExample(): Promise<void> {
     const vizPlayer = createAudioPlayer({ volume: 0.5 });
 
     if (validSounds.length > 0) {
-      vizPlayer.loadFile(validSounds[0]);
+      await vizPlayer.loadFile(validSounds[0]);
       visualizer.start(vizPlayer);
-      vizPlayer.play();
+      await vizPlayer.play();
 
       await new Promise((resolve) => setTimeout(resolve, 5000));
       visualizer.stop();
-      vizPlayer.stop();
+      await vizPlayer.stop();
     }
 
     // Example 5: Device enumeration with types
     console.log("\n🔊 Device Enumeration");
     const devicePlayer = createAudioPlayer();
-    const devices: AudioDeviceInfo[] = devicePlayer.getDevices();
+    const devices = devicePlayer.getDevices();
 
     console.log("Available audio devices:");
-    devices.forEach((device: AudioDeviceInfo, index: number) => {
+    devices.forEach((device: any, index: number) => {
       console.log(
-        `  ${index + 1}. ${device.name} (${device.is_default ? "Default" : "Secondary"})`,
+        `  ${index + 1}. ${device.name} (${device.isDefault ? "Default" : "Secondary"})`,
       );
     });
 
@@ -394,7 +399,7 @@ async function runAdvancedExample(): Promise<void> {
       const errorPlayer = new AudioPlayer();
 
       // Try to load non-existent file
-      errorPlayer.loadFile("non-existent-file.mp3");
+      await errorPlayer.loadFile("non-existent-file.mp3");
     } catch (error) {
       console.log("✅ Caught expected error:", (error as Error).message);
     }
@@ -402,7 +407,7 @@ async function runAdvancedExample(): Promise<void> {
     try {
       // Try to set invalid volume
       const volumePlayer = new AudioPlayer();
-      volumePlayer.setVolume(2.0); // Invalid: > 1.0
+      await volumePlayer.setVolume(2.0); // Invalid: > 1.0
     } catch (error) {
       console.log("✅ Caught volume error:", (error as Error).message);
     }
