@@ -1,4 +1,4 @@
-# 🚀 miniaudio-node Changelog
+# 🚀 miniaudio_node Changelog
 
 All notable changes to this project will be documented in this file.
 
@@ -133,7 +133,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Project Structure
 
 ```
-miniaudio_ffi/
+miniaudio_node/
 ├── src/lib.rs              # Clean, optimized Rust source
 ├── examples/
 │   ├── usage.js           # Basic usage example
@@ -182,7 +182,7 @@ If you were using the previous `miniaudio-ffi` name:
 npm uninstall miniaudio-ffi
 
 # New package name (recommended)
-npm install miniaudio-node
+npm install miniaudio_node
 ```
 
 The API remains exactly the same - only the package name has changed for better discoverability.

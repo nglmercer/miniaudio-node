@@ -2,7 +2,7 @@ const {
   AudioPlayer,
   initializeAudio,
   getSupportedFormats,
-} = require("../miniaudio-node.win32-x64-msvc.node");
+} = require("../index.js");
 
 async function demonstrateAudio() {
   try {

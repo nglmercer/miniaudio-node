@@ -1,7 +1,7 @@
 /**
  * Unit Tests for AudioPlayer
  *
- * These tests verify the core functionality of the AudioPlayer class
+ * These tests verify of core functionality of AudioPlayer class
  * using Bun's built-in test runner.
  */
 
@@ -15,10 +15,11 @@ const {
   isFormatSupported,
   getAudioMetadata,
   PlaybackState,
-} = await import("../../dist/index.js");
+} = await import("../../index.js");
 
 // Import types separately
-import type { AudioDeviceInfo,AudioPlayerConfig } from "../../dist/index.js";
+import type { AudioDeviceInfo,AudioPlayerConfig } from "../../index.js";
+
 describe('AudioPlayer', () => {
   let player: typeof AudioPlayer | any = null;
 

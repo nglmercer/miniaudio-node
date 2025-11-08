@@ -1,8 +1,8 @@
 # 🎵 MiniAudio Node
 
-[![npm version](https://badge.fury.io/js/miniaudio-node.svg)](https://badge.fury.io/js/miniaudio-node)
+[![npm version](https://badge.fury.io/js/miniaudio_node.svg)](https://badge.fury.io/js/miniaudio_node)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/audio-dev/miniaudio-node)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/audio-dev/miniaudio_node)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
 [![Bun](https://img.shields.io/badge/bun-1.0+-ff69b4.svg)](https://bun.sh)
 
@@ -24,16 +24,16 @@
 
 ```bash
 # Install via Bun (recommended)
-bun add miniaudio-node
+bun add miniaudio_node
 
 # Install via npm
-npm install miniaudio-node
+npm install miniaudio_node
 
 # Install via yarn
-yarn add miniaudio-node
+yarn add miniaudio_node
 
 # Install via pnpm
-pnpm add miniaudio-node
+pnpm add miniaudio_node
 ```
 
 ## 🚀 Quick Start
@@ -41,7 +41,7 @@ pnpm add miniaudio-node
 ### Basic Usage
 
 ```typescript
-import { AudioPlayer, initializeAudio } from 'miniaudio-node'
+import { AudioPlayer, initializeAudio } from 'miniaudio_node'
 
 // Initialize audio system
 console.log(initializeAudio()) // "Audio system initialized successfully"
@@ -78,7 +78,7 @@ setTimeout(() => {
 ### Quick Play Function
 
 ```typescript
-import { quickPlay } from 'miniaudio-node'
+import { quickPlay } from 'miniaudio_node'
 
 // Simple one-liner playback
 const player = quickPlay('path/to/audio.mp3', { 
@@ -100,7 +100,7 @@ import {
   createAudioPlayer,
   type PlaybackOptions,
   type AudioDeviceInfo
-} from 'miniaudio-node'
+} from 'miniaudio_node'
 
 // Create player with options
 const options: PlaybackOptions = {
@@ -238,42 +238,140 @@ enum PlaybackState {
 
 ```bash
 # Clone the repository
-git clone https://github.com/audio-dev/miniaudio-node.git
-cd miniaudio-node
+git clone https://github.com/audio-dev/miniaudio_node.git
+cd miniaudio_node
 
-# Install dependencies with Bun
+# Install dependencies
 bun install
 
-# Build the project
+# Build the native module
 bun run build
 
 # Run tests
 bun test
-
-# Run examples
-bun run examples:basic
-bun run examples:typescript
 ```
 
 ### Available Scripts
 
 | Script | Description |
 |--------|-------------|
-| `bun dev` | Development mode with hot reload |
-| `bun build` | Build TypeScript and native module |
-| `bun build:ts` | Build TypeScript only |
-| `bun build:native` | Build Rust native module |
+| `bun build` | Build native Rust module |
+| `bun build:debug` | Build with debug symbols |
 | `bun test` | Run all tests |
 | `bun test:watch` | Run tests in watch mode |
-| `bun test:coverage` | Run tests with coverage |
+| `bun clean` | Clean build artifacts |
+| `bun dev` | Build and test |
 | `bun lint` | Run ESLint |
 | `bun format` | Format code with Prettier |
-| `bun clean` | Clean build artifacts |
+
+## 🚀 Publishing Multi-Platform
+
+### Recommended Strategy: GitHub Actions
+
+**Use GitHub Actions for automatic cross-platform compilation** - this is the best approach for native modules.
+
+#### 1. Setup GitHub Actions
+
+Create `.github/workflows/release.yml`:
+
+```yaml
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Build native module
+        run: |
+          cd native
+          cargo build --release
+          cargo test --release
+          
+      - name: Setup Bun (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+          
+      - name: Setup Bun (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          powershell -c "irm bun.sh/install.ps1 | iex"
+          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+          
+      - name: Run tests
+        run: bun test
+        
+      - name: Publish to NPM
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish
+```
+
+#### 2. Release Process
+
+```bash
+# 1. Update version
+npm version patch  # or minor/major
+
+# 2. Push tag
+git push --tags
+
+# 3. GitHub Actions will:
+#    - Build for Windows, macOS, Linux
+#    - Run tests on each platform
+#    - Publish to npm automatically
+```
+
+### Alternative: Manual Multi-Platform Build
+
+If you prefer manual builds:
+
+```bash
+# 1. Build for each platform manually
+# Windows (in Windows)
+cd native && cargo build --release --target x86_64-pc-windows-msvc
+
+# macOS (in macOS)  
+cd native && cargo build --release --target x86_64-apple-darwin
+
+# Linux (in Linux)
+cd native && cargo build --release --target x86_64-unknown-linux-gnu
+
+# 2. Publish from one platform
+npm publish
+```
+
+### Cross-Platform Considerations
+
+- **GitHub Actions** is recommended for consistent builds
+- **Native dependencies** are platform-specific
+- **Testing** should run on all target platforms
+- **Version management** should use semantic versioning
+- **Release automation** prevents human error
 
 ### Project Structure
 
 ```
-miniaudio-node/
+miniaudio_node/
 ├── src/                     # TypeScript source code
 │   ├── index.ts            # Main entry point
 │   ├── types/              # Type definitions
@@ -345,7 +443,7 @@ await effects.fadeOut(2000)
 ### Error Handling
 
 ```typescript
-import { AudioPlayer } from 'miniaudio-node'
+import { AudioPlayer } from 'miniaudio_node'
 
 try {
   const player = new AudioPlayer()
@@ -406,7 +504,7 @@ Compared to other Node.js audio libraries:
 
 | Library | CPU Usage | Memory | Startup | Formats | Bun Support |
 |----------|------------|--------|----------|----------|-------------|
-| **miniaudio-node** | ~0.8% | ~2MB | 45ms | 6+ | ✅ |
+| **miniaudio_node** | ~0.8% | ~2MB | 45ms | 6+ | ✅ |
 | node-speaker | ~1.2% | ~3MB | 60ms | 1 | ❌ |
 | web-audio-api | ~2.1% | ~5MB | 80ms | 3 | ⚠️ |
 | node-lame | ~1.5% | ~4MB | 70ms | 1 | ❌ |
@@ -435,8 +533,8 @@ We welcome contributions! Please follow our guidelines:
 
 ```bash
 # Clone your fork
-git clone https://github.com/YOUR_USERNAME/miniaudio-node.git
-cd miniaudio-node
+git clone https://github.com/YOUR_USERNAME/miniaudio_node.git
+cd miniaudio_node
 
 # Install dependencies
 bun install
@@ -469,14 +567,14 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📞 Support
 
-- 📧 **Issues**: [GitHub Issues](https://github.com/audio-dev/miniaudio-node/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/audio-dev/miniaudio-node/discussions)
-- 📖 **Documentation**: [Full Docs](https://miniaudio-node.js.org)
+- 📧 **Issues**: [GitHub Issues](https://github.com/audio-dev/miniaudio_node/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/audio-dev/miniaudio_node/discussions)
+- 📖 **Documentation**: [Full Docs](https://miniaudio_node.js.org)
 - 🐛 **Bug Reports**: Please use the issue template with reproduction steps
 
 ## 🌟 Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=audio-dev/miniaudio-node&type=Date)](https://star-history.com/#audio-dev/miniaudio-node&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=audio-dev/miniaudio_node&type=Date)](https://star-history.com/#audio-dev/miniaudio_node&Date)
 
 ---
 

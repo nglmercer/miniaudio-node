@@ -5,7 +5,7 @@ This document explains the professional project structure and organization of Mi
 ## 📁 Directory Structure
 
 ```
-miniaudio-node/
+miniaudio_node/
 ├── 🦀 native/                      # Rust native module
 │   ├── src/
 │   │   └── lib.rs                 # Rust FFI implementation
@@ -141,8 +141,8 @@ bun run test:coverage
 
 ### 1. **Initial Setup**
 ```bash
-git clone https://github.com/audio-dev/miniaudio-node.git
-cd miniaudio-node
+git clone https://github.com/audio-dev/miniaudio_node.git
+cd miniaudio_node
 just setup  # Install dependencies and configure environment
 ```
 

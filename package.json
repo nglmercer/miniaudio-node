@@ -1,157 +1,54 @@
 {
-  "name": "miniaudio-node",
+  "name": "miniaudio_node",
   "version": "1.0.0",
-  "description": "High-performance native audio playback for Bun/Node.js. Built with Rust and rodio, supporting multiple audio formats with cross-platform compatibility.",
+  "description": "High-performance native audio playback for Bun/Node.js",
   "type": "module",
-  "main": "./dist/index.js",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "index.js",
+  "types": "index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    },
-    "./types": {
-      "types": "./dist/types/index.d.ts"
+      "import": "./index.js",
+      "types": "./index.d.ts"
     }
   },
   "files": [
-    "dist/",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md"
+    "index.js",
+    "index.d.ts",
+    "types.d.ts",
+    "*.node"
   ],
   "scripts": {
-    "dev": "bun scripts/dev.ts",
-    "dev:verbose": "bun scripts/dev.ts --verbose",
-    "dev:skip-tests": "bun scripts/dev.ts --skip-tests",
-    "build": "bun scripts/build.ts",
-    "build:debug": "bun scripts/build.ts --debug",
-    "build:verbose": "bun scripts/build.ts --verbose",
-    "build:release": "bun scripts/build.ts",
-    "build:ts": "bun scripts/build.ts --skip-native",
-    "build:native": "bun scripts/build.ts --skip-types",
-    "build:types": "bun run build:ts && bun tsc --emitDeclarationOnly --declarationMap --outDir dist",
-    "clean": "bun scripts/clean.ts",
-    "clean:verbose": "bun scripts/clean.ts --verbose",
-    "clean:aggressive": "bun scripts/clean.ts --aggressive",
-    "clean:dry-run": "bun scripts/clean.ts --dry-run",
+    "build": "napi build --release --platform",
+    "build:debug": "napi build --platform",
+    "build:watch": "napi build --platform --watch",
     "test": "bun test",
     "test:watch": "bun test --watch",
-    "test:coverage": "bun test --coverage",
-    "test:unit": "bun test tests/unit/",
-    "test:integration": "bun test tests/integration/",
-    "test:bench": "bun test benchmarks/",
-    "lint": "bun eslint 'src/**/*.ts' --config config/eslint.config.js",
-    "lint:fix": "bun eslint 'src/**/*.ts' --config config/eslint.config.js --fix",
-    "format": "bun prettier --write 'src/**/*.ts' --config config/prettier.config.js",
-    "format:check": "bun prettier --check 'src/**/*.ts' --config config/prettier.config.js",
-    "typecheck": "bun tsc --noEmit --project config/tsconfig.json",
-    "typecheck:watch": "bun tsc --noEmit --watch --project config/tsconfig.json",
-    "prepublishOnly": "bun run clean && bun run build:release",
-    "release": "bun run build:release && changeset publish",
-    "docs:dev": "vitepress dev docs",
-    "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs",
-    "examples:basic": "bun examples/javascript/basic.js",
-    "examples:typescript": "bun examples/typescript/advanced.ts",
-    "examples:all": "bun run examples:basic && bun run examples:typescript",
-    "bench": "bun benchmarks/",
-    "bench:compare": "bun benchmarks/compare.ts",
-    "analyze": "bun run build:release && bun run analyze:size",
-    "analyze:size": "bunx bundlesize",
-    "postinstall": "bun run build:native",
-    "prepare": "husky install",
-    "native:build": "cd native && cargo build --release",
-    "native:build:debug": "cd native && cargo build",
-    "native:test": "cd native && cargo test",
-    "native:clean": "cd native && cargo clean",
-    "native:types": "cd native && napi build --platform --release --dts",
-    "native:js": "cd native && napi build --platform --release --js"
+    "clean": "napi clean && cargo clean",
+    "prepublishOnly": "napi prepublish -t npm && bun test",
+    "artifacts": "napi artifacts"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.0"
+  },
+  "napi": {
+    "name": "miniaudio_node",
+    "triples": {
+      "defaults": true,
+      "additional": [
+        "x86_64-pc-windows-msvc",
+        "i686-pc-windows-msvc",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-gnu"
+      ]
+    }
   },
   "engines": {
     "bun": ">=1.0.0",
     "node": ">=18.0.0"
   },
-  "keywords": [
-    "audio",
-    "playback",
-    "music",
-    "sound",
-    "native",
-    "rust",
-    "cross-platform",
-    "wav",
-    "mp3",
-    "flac",
-    "ogg",
-    "m4a",
-    "aac",
-    "multimedia",
-    "speakers",
-    "headphones",
-    "high-performance",
-    "bun",
-    "bun-native",
-    "typescript",
-    "napi-rs"
-  ],
-  "author": {
-    "name": "Audio Development Team",
-    "email": "audio@example.com",
-    "url": "https://github.com/audio-dev"
-  },
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/audio-dev/miniaudio-node.git"
-  },
-  "bugs": {
-    "url": "https://github.com/audio-dev/miniaudio-node/issues"
-  },
-  "homepage": "https://miniaudio-node.js.org",
-  "devDependencies": {
-    "@changesets/cli": "^2.27.1",
-    "@types/bun": "^1.0.0",
-    "@types/node": "^20.10.0",
-    "@typescript-eslint/eslint-plugin": "^6.0.0",
-    "@typescript-eslint/parser": "^6.0.0",
-    "@napi-rs/cli": "^2.18.0",
-    "eslint": "^8.50.0",
-    "eslint-config-prettier": "^9.0.0",
-    "eslint-plugin-prettier": "^5.0.0",
-    "husky": "^8.0.0",
-    "lint-staged": "^15.0.0",
-    "prettier": "^3.0.0",
-    "typescript": "^5.0.0",
-    "vitepress": "^1.0.0"
-  },
-  "publishConfig": {
-    "access": "public"
-  },
-  "bundlesize": [
-    {
-      "path": "./dist/index.js",
-      "maxSize": "50KB"
-    },
-    {
-      "path": "./dist/*.node",
-      "maxSize": "5MB"
-    }
-  ],
-  "lint-staged": {
-    "*.{ts,js}": [
-      "bun eslint --config config/eslint.config.js --fix",
-      "bun prettier --write --config config/prettier.config.js"
-    ],
-    "*.{json,md}": [
-      "bun prettier --write --config config/prettier.config.js"
-    ]
-  },
-  "config": {
-    "commitizen": {
-      "path": "cz-conventional-changelog"
-    }
-  }
+  "repository": "https://github.com/audio-dev/miniaudio_node.git",
+  "license": "MIT"
 }

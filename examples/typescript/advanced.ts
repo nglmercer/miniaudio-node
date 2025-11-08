@@ -1,11 +1,11 @@
 /**
  * Advanced Audio Playback Example with TypeScript and Bun
  *
- * This example demonstrates advanced features of miniaudio-node
+ * This example demonstrates advanced features of miniaudio_node
  * including error handling, async operations, and type safety.
  */
 
-// Import the native module directly
+// Import native module directly
 const {
   AudioPlayer,
   initializeAudio,
@@ -15,10 +15,10 @@ const {
   isFormatSupported,
   getAudioMetadata,
   PlaybackState,
-} = await import("../../dist/index.js");
+} = await import("../../index.js");
 
 // Import types separately
-import type { AudioDeviceInfo,AudioPlayerConfig } from "../../dist/index.js";
+import type { AudioDeviceInfo,AudioPlayerConfig } from "../../index.js";
 
 /**
  * Playlist manager class for handling multiple audio files
@@ -30,12 +30,12 @@ class PlaylistManager {
   private isPlaying: boolean = false;
   private loop: boolean = false;
 
-  constructor(options?: AudioPlayerConfig | undefined| null) {
+  constructor(options?: AudioPlayerConfig | undefined) {
     this.player = createAudioPlayer(options);
   }
 
   /**
-   * Load multiple tracks into the playlist
+   * Load multiple tracks into playlist
    */
   async loadTracks(tracks: string[]): Promise<void> {
     console.log(`📚 Loading ${tracks.length} tracks into playlist...`);
@@ -63,7 +63,7 @@ class PlaylistManager {
   }
 
   /**
-   * Play the current track
+   * Play current track
    */
   async playCurrentTrack(): Promise<void> {
     if (this.tracks.length === 0) {
@@ -106,7 +106,7 @@ class PlaylistManager {
   }
 
   /**
-   * Play next track in the playlist
+   * Play next track in playlist
    */
   async nextTrack(): Promise<void> {
     this.currentTrackIndex++;
@@ -220,77 +220,6 @@ class AudioVisualizer {
 }
 
 /**
- * Advanced audio effects controller
- */
-class AudioEffects {
-  private player: any;
-  private originalVolume: number = 1.0;
-
-  constructor(player: any) {
-    this.player = player;
-    this.originalVolume = player.getVolume();
-  }
-
-  /**
-   * Fade in effect
-   */
-  async fadeIn(duration: number = 2000): Promise<void> {
-    console.log(`🎭 Fading in over ${duration}ms...`);
-
-    const steps = 20;
-    const stepDuration = duration / steps;
-    const volumeIncrement = this.originalVolume / steps;
-
-    await this.player.setVolume(0);
-    await this.player.play();
-
-    for (let i = 1; i <= steps; i++) {
-      await new Promise((resolve) => setTimeout(resolve, stepDuration));
-      await this.player.setVolume(i * volumeIncrement);
-    }
-  }
-
-  /**
-   * Fade out effect
-   */
-  async fadeOut(duration: number = 2000): Promise<void> {
-    console.log(`🎭 Fading out over ${duration}ms...`);
-
-    const steps = 20;
-    const stepDuration = duration / steps;
-    const currentVolume = this.player.getVolume();
-    const volumeDecrement = currentVolume / steps;
-
-    for (let i = 1; i <= steps; i++) {
-      await new Promise((resolve) => setTimeout(resolve, stepDuration));
-      await this.player.setVolume(currentVolume - i * volumeDecrement);
-    }
-
-    await this.player.pause();
-    await this.player.setVolume(this.originalVolume);
-  }
-
-  /**
-   * Volume oscillation effect
-   */
-  async oscillateVolume(duration: number = 3000): Promise<void> {
-    console.log(`🎭 Oscillating volume for ${duration}ms...`);
-
-    const steps = 30;
-    const stepDuration = duration / steps;
-
-    for (let i = 0; i < steps; i++) {
-      const volume =
-        ((Math.sin((i / steps) * Math.PI * 2) + 1) / 2) * this.originalVolume;
-      await this.player.setVolume(volume);
-      await new Promise((resolve) => setTimeout(resolve, stepDuration));
-    }
-
-    await this.player.setVolume(this.originalVolume);
-  }
-}
-
-/**
  * Main advanced example runner
  */
 async function runAdvancedExample(): Promise<void> {
@@ -350,25 +279,14 @@ async function runAdvancedExample(): Promise<void> {
     // Example 3: Audio effects
     console.log("\n🎭 Audio Effects Example");
     const effectsPlayer = createAudioPlayer({ volume: 0.6 });
-    const effects = new AudioEffects(effectsPlayer);
 
     if (validSounds.length > 0) {
       await effectsPlayer.loadFile(validSounds[0]);
-
-      // Fade in effect
-      await effects.fadeIn(2000);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-
-      // Oscillate volume
-      await effects.oscillateVolume(3000);
-
-      // Fade out effect
-      await effects.fadeOut(2000);
     }
 
     // Example 4: Visualizer
-    console.log("\n📊 Audio Visualizer Example");
     const visualizer = new AudioVisualizer();
+    console.log("\n📊 Audio Visualizer Example");
     const vizPlayer = createAudioPlayer({ volume: 0.5 });
 
     if (validSounds.length > 0) {
@@ -389,7 +307,7 @@ async function runAdvancedExample(): Promise<void> {
     console.log("Available audio devices:");
     devices.forEach((device: any, index: number) => {
       console.log(
-        `  ${index + 1}. ${device.name} (${device.isDefault ? "Default" : "Secondary"})`,
+        `  ${index + 1}. ${device.name} (${device.is_default ? "Default" : "Secondary"})`,
       );
     });
 
@@ -427,9 +345,9 @@ async function runAdvancedExample(): Promise<void> {
 }
 
 // Export for individual testing
-export { PlaylistManager, AudioVisualizer, AudioEffects, runAdvancedExample };
+export { PlaylistManager, AudioVisualizer, runAdvancedExample };
 
-// Run if this is the main module
+// Run if this is main module
 if (import.meta.main) {
   runAdvancedExample().catch(console.error);
 }

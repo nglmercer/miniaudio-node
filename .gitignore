@@ -8,7 +8,7 @@ dist/
 coverage/
 test-results/
 playwright-report/
-
+target/
 # Native build artifacts
 native/target/
 *.node

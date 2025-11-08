@@ -135,25 +135,25 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: miniaudio-node.linux-x64-gnu.node
+            artifact_name: miniaudio_node.linux-x64-gnu.node
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            artifact_name: miniaudio-node.linux-x64-musl.node
+            artifact_name: miniaudio_node.linux-x64-musl.node
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            artifact_name: miniaudio-node.linux-arm64-gnu.node
+            artifact_name: miniaudio_node.linux-arm64-gnu.node
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: miniaudio-node.win32-x64-msvc.node
+            artifact_name: miniaudio_node.win32-x64-msvc.node
           - os: windows-latest
             target: i686-pc-windows-msvc
-            artifact_name: miniaudio-node.win32-ia32-msvc.node
+            artifact_name: miniaudio_node.win32-ia32-msvc.node
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact_name: miniaudio-node.darwin-x64.node
+            artifact_name: miniaudio_node.darwin-x64.node
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_name: miniaudio-node.darwin-arm64.node
+            artifact_name: miniaudio_node.darwin-arm64.node
 
     steps:
       - name: Checkout code
@@ -184,7 +184,7 @@ jobs:
       - name: Prepare artifact
         run: |
           mkdir -p dist
-          cp native/target/${{ matrix.target }}/release/miniaudio_ffi.* dist/${{ matrix.artifact_name }}
+          cp native/target/${{ matrix.target }}/release/miniaudio_node.* dist/${{ matrix.artifact_name }}
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v3
