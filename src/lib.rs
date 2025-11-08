@@ -1,12 +1,12 @@
 //! MiniAudio FFI - High-performance native audio playback for Node.js/Bun
 
-use napi::{Result, Error, Status};
+use napi::{Error, Result, Status};
 use napi_derive::napi;
-use std::sync::{Arc, Mutex};
-use std::path::Path;
-use rodio::{OutputStream, Sink, Decoder};
+use rodio::{Decoder, OutputStream, Sink};
 use std::fs::File;
 use std::io::BufReader;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 /// Audio device information structure
 #[napi(object)]
@@ -18,6 +18,7 @@ pub struct AudioDeviceInfo {
 
 /// Audio player state enumeration
 #[napi]
+#[derive(Debug, PartialEq)]
 pub enum PlaybackState {
     Stopped = 0,
     Loaded = 1,
@@ -28,7 +29,8 @@ pub enum PlaybackState {
 /// Thread-safe audio player with proper resource management
 #[napi]
 pub struct AudioPlayer {
-    _stream: Option<Arc<OutputStream>>,
+    #[allow(dead_code)] // Suppress clippy warning for now
+    _stream: Option<std::rc::Rc<OutputStream>>,
     sink: Option<Arc<Mutex<Sink>>>,
     current_file: Option<String>,
     volume: f32,
@@ -67,7 +69,10 @@ impl AudioPlayer {
     pub fn load_file(&mut self, file_path: String) -> Result<()> {
         let path = Path::new(&file_path);
         if !path.exists() {
-            return Err(Error::new(Status::InvalidArg, format!("File not found: {}", file_path)));
+            return Err(Error::new(
+                Status::InvalidArg,
+                format!("File not found: {}", file_path),
+            ));
         }
 
         self.stop().ok();
@@ -87,7 +92,7 @@ impl AudioPlayer {
         sink.append(source);
         sink.pause();
 
-        self._stream = Some(Arc::new(stream));
+        self._stream = Some(std::rc::Rc::new(stream));
         self.sink = Some(Arc::new(Mutex::new(sink)));
         self.current_file = Some(file_path);
         self.state = PlaybackState::Loaded;
@@ -97,12 +102,15 @@ impl AudioPlayer {
 
     #[napi]
     pub fn play(&mut self) -> Result<()> {
-        let sink = self.sink.as_ref()
+        let sink = self
+            .sink
+            .as_ref()
             .ok_or_else(|| Error::new(Status::InvalidArg, "Player not initialized"))?;
-        
-        let guard = sink.lock()
+
+        let guard = sink
+            .lock()
             .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
-        
+
         if guard.empty() {
             return Err(Error::new(Status::InvalidArg, "No audio loaded"));
         }
@@ -115,12 +123,15 @@ impl AudioPlayer {
 
     #[napi]
     pub fn pause(&mut self) -> Result<()> {
-        let sink = self.sink.as_ref()
+        let sink = self
+            .sink
+            .as_ref()
             .ok_or_else(|| Error::new(Status::InvalidArg, "Player not initialized"))?;
-        
-        let guard = sink.lock()
+
+        let guard = sink
+            .lock()
             .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
-        
+
         guard.pause();
         drop(guard);
         self.state = PlaybackState::Paused;
@@ -129,12 +140,15 @@ impl AudioPlayer {
 
     #[napi]
     pub fn stop(&mut self) -> Result<()> {
-        let sink = self.sink.as_ref()
+        let sink = self
+            .sink
+            .as_ref()
             .ok_or_else(|| Error::new(Status::InvalidArg, "Player not initialized"))?;
-        
-        let guard = sink.lock()
+
+        let guard = sink
+            .lock()
             .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
-        
+
         guard.stop();
         drop(guard);
         self.state = PlaybackState::Stopped;
@@ -144,7 +158,10 @@ impl AudioPlayer {
     #[napi]
     pub fn set_volume(&mut self, volume: f64) -> Result<()> {
         if !(0.0..=1.0).contains(&volume) {
-            return Err(Error::new(Status::InvalidArg, "Volume must be between 0.0 and 1.0"));
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Volume must be between 0.0 and 1.0",
+            ));
         }
 
         self.volume = volume as f32;
@@ -163,7 +180,8 @@ impl AudioPlayer {
 
     #[napi]
     pub fn is_playing(&self) -> bool {
-        self.sink.as_ref()
+        self.sink
+            .as_ref()
             .and_then(|s| s.lock().ok())
             .map(|g| !g.is_paused() && !g.empty())
             .unwrap_or(false)
@@ -199,7 +217,12 @@ pub fn initialize_audio() -> Result<String> {
 
 #[napi]
 pub fn get_supported_formats() -> Vec<String> {
-    vec!["wav".to_string(), "mp3".to_string(), "flac".to_string(), "ogg".to_string()]
+    vec![
+        "wav".to_string(),
+        "mp3".to_string(),
+        "flac".to_string(),
+        "ogg".to_string(),
+    ]
 }
 
 #[napi]
@@ -226,36 +249,34 @@ pub struct AudioPlayerConfig {
 #[napi]
 pub fn create_audio_player(config: Option<AudioPlayerConfig>) -> Result<AudioPlayer> {
     let mut player = AudioPlayer::new();
-    
+
     if let Some(cfg) = config.as_ref() {
         if let Some(vol) = cfg.volume {
             player.set_volume(vol)?;
         }
     }
-    
+
     Ok(player)
 }
 
 #[napi]
 pub fn quick_play(file_path: String, config: Option<AudioPlayerConfig>) -> Result<AudioPlayer> {
     let mut player = AudioPlayer::new();
-    
+
     if let Some(cfg) = config.as_ref() {
         if let Some(vol) = cfg.volume {
             player.set_volume(vol)?;
         }
     }
-    
+
     player.load_file(file_path)?;
-    
-    let auto_play = config.as_ref()
-        .and_then(|c| c.auto_play)
-        .unwrap_or(false);
-    
+
+    let auto_play = config.as_ref().and_then(|c| c.auto_play).unwrap_or(false);
+
     if auto_play {
         player.play()?;
     }
-    
+
     Ok(player)
 }
 
@@ -271,11 +292,14 @@ pub struct AudioMetadata {
 pub fn get_audio_metadata(file_path: String) -> Result<AudioMetadata> {
     let path = Path::new(&file_path);
     if !path.exists() {
-        return Err(Error::new(Status::InvalidArg, format!("File not found: {}", file_path)));
+        return Err(Error::new(
+            Status::InvalidArg,
+            format!("File not found: {}", file_path),
+        ));
     }
 
     // For now, return placeholder metadata
-    // In a real implementation, you'd extract actual metadata from the audio file
+    // In a real implementation, you'd extract actual metadata from audio file
     Ok(AudioMetadata {
         duration: 0.0,
         title: None,
