@@ -6,56 +6,31 @@ This document explains the professional project structure and organization of Mi
 
 ```
 miniaudio-node/
-├── 📋 src/                          # TypeScript source code
-│   ├── index.ts                    # Main entry point
-│   ├── types/                      # TypeScript type definitions
-│   │   ├── audio.types.ts         # Audio-related types
-│   │   └── index.ts               # Type exports
-│   ├── player/                     # Audio player implementation
-│   │   ├── audio-player.ts        # Main AudioPlayer class
-│   │   └── index.ts               # Player exports
-│   └── utils/                      # Utility functions
-│       ├── format-checker.ts       # Format validation
-│       ├── device-manager.ts      # Device enumeration
-│       └── index.ts               # Utility exports
-│
 ├── 🦀 native/                      # Rust native module
 │   ├── src/
 │   │   └── lib.rs                 # Rust FFI implementation
 │   ├── Cargo.toml                 # Rust dependencies
-│   ├── build.rs                   # Build script
+│   ├── index.js                   # Native module entry point
+│   ├── package.json               # Native package configuration
 │   └── target/                    # Rust build artifacts
 │
 ├── 🧪 tests/                       # Test suite
 │   ├── unit/                      # Unit tests
-│   │   ├── audio-player.test.ts   # AudioPlayer tests
-│   │   ├── utils.test.ts          # Utility tests
-│   │   └── types.test.ts          # Type definition tests
-│   ├── integration/               # Integration tests
-│   │   ├── playback.test.ts       # Real audio playback tests
-│   │   ├── cross-platform.test.ts # Platform-specific tests
-│   │   └── performance.test.ts    # Performance benchmarks
-│   └── fixtures/                  # Test audio files
-│       ├── sample.wav
-│       ├── sample.mp3
-│       └── sample.flac
+│   │   └── audio-player.test.ts   # AudioPlayer tests
+│   └── integration/               # Integration tests
+│       └── playback.test.ts       # Core API integration tests
 │
 ├── 📚 examples/                    # Example usage
-│   ├── javascript/                # JavaScript examples
-│   │   ├── basic.js              # Basic usage example
-│   │   └── advanced.js           # Advanced features
+│   ├── usage.js                   # Basic JavaScript example
 │   └── typescript/               # TypeScript examples
-│       ├── basic.ts              # Basic TypeScript usage
-│       ├── advanced.ts           # Advanced features with types
-│       ├── playlist-manager.ts    # Playlist management example
-│       └── audio-effects.ts      # Audio effects example
+│       └── advanced.ts           # Advanced features with types
 │
 ├── 🔧 scripts/                     # Build and utility scripts
 │   ├── build.ts                   # Main build script
 │   ├── clean.ts                   # Cleanup script
 │   ├── dev.ts                     # Development server
-│   ├── test.ts                    # Test runner script
-│   └── release.ts                 # Release automation
+│   ├── install.js                 # Post-install script
+│   └── simple-build.js            # Simple build script
 │
 ├── ⚙️ config/                      # Configuration files
 │   ├── tsconfig.json              # TypeScript configuration
@@ -64,38 +39,13 @@ miniaudio-node/
 │   └── bunfig.toml                # Bun configuration
 │
 ├── 📖 docs/                        # Documentation
-│   ├── api/                       # API documentation
-│   ├── guides/                    # User guides
-│   ├── examples/                  # Documentation examples
 │   ├── CHANGELOG.md               # Version history
 │   ├── LICENSE                    # License file
-│   └── .vitepress/                # VitePress configuration
+│   └── PROJECT_STRUCTURE.md       # This file
 │
-├── 🏗️ benchmarks/                  # Performance benchmarks
-│   ├── audio-playback.bench.ts    # Playback performance
-│   ├── memory-usage.bench.ts      # Memory benchmarks
-│   └── compare.ts                 # Benchmark comparison tool
-│
-├── 🚀 .github/                     # GitHub configuration
-│   ├── workflows/                 # GitHub Actions
-│   │   ├── ci.yml                # Main CI/CD pipeline
-│   │   ├── security.yml           # Security scanning
-│   │   └── release.yml           # Release automation
-│   ├── ISSUE_TEMPLATE/            # Issue templates
-│   └── PULL_REQUEST_TEMPLATE.md  # PR template
-│
-├── 📦 dist/                        # Build output (git ignored)
-│   ├── index.js                   # Compiled JavaScript
-│   ├── index.d.ts                 # Generated type definitions
-│   ├── types/                     # Type definitions
-│   └── *.node                     # Native binaries
-│
-├── 🔒 .changeset/                  # Version management
-│   ├── config.json                # Changeset configuration
-│   └── *.md                       # Pending changesets
+├── 🏗️ benchmarks/                  # Performance benchmarks (placeholder)
 │
 ├── 📄 package.json                 # Package configuration
-├── 🔒 bun.lockb                    # Bun lock file
 ├── 📝 justfile                     # Just command runner
 ├── 🚫 .gitignore                   # Git ignore rules
 └── 📖 README.md                    # Main documentation

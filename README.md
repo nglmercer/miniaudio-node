@@ -145,7 +145,8 @@ const player = new AudioPlayer()
 | `getDevices()` | Get audio devices | `none` | `AudioDeviceInfo[]` |
 | `getDuration()` | Get audio duration | `none` | `number` |
 | `getCurrentTime()` | Get playback position | `none` | `number` |
-| `get currentFile` | Get loaded file path | `none` | `string \| null` |
+| `getState()` | Get current playback state | `none` | `PlaybackState` |
+| `getCurrentFile()` | Get loaded file path | `none` | `string \| null` |
 
 ### Utility Functions
 
@@ -172,24 +173,31 @@ getAudioMetadata(filePath: string): AudioMetadata
 ### Type Definitions
 
 ```typescript
-interface PlaybackOptions {
+interface AudioPlayerConfig {
   volume?: number
-  loop?: boolean
-  autoPlay?: boolean
+  loop_playback?: boolean
+  auto_play?: boolean
 }
 
 interface AudioDeviceInfo {
   id: string
   name: string
-  is_default: boolean
+  isDefault: boolean
 }
 
 interface AudioMetadata {
-  duration?: number
-  sampleRate?: number
-  channels?: number
-  bitrate?: number
+  duration?: string
+  sample_rate?: string
+  channels?: string
+  bitrate?: string
   format?: string
+}
+
+enum PlaybackState {
+  Stopped = 0,
+  Loaded = 1,
+  Playing = 2,
+  Paused = 3
 }
 ```
 

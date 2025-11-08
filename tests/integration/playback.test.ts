@@ -15,7 +15,7 @@ import {
   isFormatSupported,
   getAudioMetadata,
   PlaybackState
-} from '../../native/index.js'
+} from '../../dist/index.js'
 
 describe('Core Audio API Integration Tests', () => {
   beforeEach(() => {
