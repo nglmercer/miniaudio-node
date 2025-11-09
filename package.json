@@ -18,7 +18,7 @@
     "*.node"
   ],
   "scripts": {
-    "build": "napi build --release --platform",
+    "build": "node scripts/build-fix.js",
     "build:debug": "napi build --platform",
     "build:watch": "napi build --platform --watch",
     "test": "bun test",
