@@ -106,27 +106,30 @@ jobs:
 
       - name: Prepare artifact for upload
         run: |
-          # Rename the generated .node file to the expected artifact name
-          if [ -f "miniaudio_node.node" ]; then
-            mv miniaudio_node.node ${{ matrix.artifact }}
+          # Create dist directory
+          mkdir -p dist
+
+          # Find the generated .node file
+          NODE_FILE=$(find . -maxdepth 1 -name "*.node" -type f | head -n 1)
+
+          if [ -n "$NODE_FILE" ]; then
+            # Copy the file to dist/ with the expected artifact name
+            cp "$NODE_FILE" "dist/${{ matrix.artifact }}"
+            echo "✅ Artifact found and copied to dist/${{ matrix.artifact }}"
           else
-            # Find the generated .node file if it has a different name
-            NODE_FILE=$(find . -name "*.node" -type f | head -n 1)
-            if [ -n "$NODE_FILE" ]; then
-              mv "$NODE_FILE" ${{ matrix.artifact }}
-            else
-              echo "❌ No .node file found after build"
-              ls -la
-              exit 1
-            fi
+            echo "❌ No .node file found after build"
+            ls -la
+            find . -name "*.node" -o -name "*.dylib" 2>/dev/null || true
+            exit 1
           fi
-          ls -la ${{ matrix.artifact }}
+
+          ls -la dist/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          path: dist/
           retention-days: 1
 
   release:
@@ -153,6 +156,7 @@ jobs:
         run: |
           mkdir -p release
           # Find and copy all .node files from their artifact directories
+          # Artifacts are now in dist/ subdirectories
           find artifacts -name "*.node" -type f -exec cp {} release/ \;
           ls -la release/
 
@@ -172,7 +176,9 @@ jobs:
           # Show debug info if files are missing
           if ! ls release/*.node 1> /dev/null 2>&1; then
             echo "No .node files found in release/, showing artifacts structure:"
-            ls -la artifacts/ || true
+            echo "--- Artifacts directory structure ---"
+            find artifacts -type d || true
+            echo "--- All .node files in artifacts ---"
             find artifacts -type f -name "*.node" || true
           fi
 
