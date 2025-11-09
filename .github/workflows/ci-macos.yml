@@ -29,6 +29,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
+          targets: x86_64-apple-darwin
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -85,11 +86,17 @@ jobs:
           restore-keys: |
             macos-latest-${{ matrix.node-version }}-deps-
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: x86_64-apple-darwin
+
       - name: Install dependencies
         run: bun install
 
       - name: Build native module
-        run: bunx napi build --platform --release --target x86_64-apple-darwin
+        run: bunx napi build --platform --release
 
       - name: Check native module
         run: ls -la *.node || echo "No .node files found"
@@ -125,6 +132,11 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
 
+      - name: Install macOS dependencies
+        run: |
+          # Install required tools for cross-compilation
+          brew install llvm
+
       - name: Cache Rust dependencies
         uses: actions/cache@v4
         with:
@@ -136,14 +148,16 @@ jobs:
           restore-keys: |
             macos-latest-${{ matrix.target }}-cargo-
 
-      # Temporarily disabled due to rodio linking issues with NAPI on arm64
-      # - name: Setup cross-compilation environment
-      #   if: matrix.target == 'aarch64-apple-darwin'
-      #   run: |
-      #     echo "Setting up ARM64 cross-compilation environment"
-      #     echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> $GITHUB_ENV
-      #     echo "MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)" >> $GITHUB_ENV
-      #   shell: bash
+      - name: Setup cross-compilation environment
+        run: |
+          # Set SDK paths for cross-compilation
+          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> $GITHUB_ENV
+            echo "MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)" >> $GITHUB_ENV
+          fi
+          # Add LLVM to PATH for cross-compilation tools
+          echo "/usr/local/opt/llvm/bin" >> $GITHUB_PATH
+        shell: bash
 
       - name: Install dependencies
         run: bun install
@@ -151,12 +165,7 @@ jobs:
       - name: Setup NAPI environment
         run: |
           # Ensure proper NAPI linking for macOS
-          export NAPI_RS_LINK_TYPE=dynamic
-          # Set SDK paths for cross-compilation
-          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
-            export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
-            export MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)
-          fi
+          echo "NAPI_RS_LINK_TYPE=dynamic" >> $GITHUB_ENV
 
       - name: Build native binary
         run: bunx napi build --target ${{ matrix.target }} --release
