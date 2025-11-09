@@ -2,13 +2,6 @@
 name = "miniaudio_node"
 version = "1.0.0"
 edition = "2021"
-authors = ["Audio Development Team <audio@example.com>"]
-description = "Rust FFI for miniaudio_node - High-performance native audio playback"
-license = "MIT"
-repository = "https://github.com/audio-dev/miniaudio_node.git"
-homepage = "https://miniaudio_node.js.org"
-keywords = ["audio", "playback", "rust", "ffi", "bun", "node"]
-categories = ["multimedia::audio", "api-bindings"]
 
 [lib]
 crate-type = ["cdylib"]
@@ -27,15 +20,11 @@ targets = [
   "aarch64-unknown-linux-gnu"
 ]
 
-# [package.metadata.napi.custom-targets...] (mantén las existentes)
 
 [dependencies]
 napi = { version = "2.16", features = ["napi4", "serde-json", "async"] }
 napi-derive = "2.16"
 rodio = { version = "0.19.0", features = ["wav", "mp3", "flac", "vorbis"] }
-
-[features]
-default = []
 
 [profile.release]
 lto = true
@@ -43,12 +32,3 @@ codegen-units = 1
 panic = "abort"
 strip = true
 opt-level = "z"
-
-[profile.release.package.napi]
-# Optimize NAPI for better linking
-codegen-units = 1
-
-[profile.dev]
-opt-level = 0
-debug = true
-overflow-checks = true

@@ -1,0 +1,17 @@
+{
+  "package": {
+    "name": "miniaudio_node"
+  },
+  "build": {
+    "target": {
+      "aarch64-apple-darwin": {
+        "linkerArgs": ["-undefined", "dynamic_lookup"],
+        "napiModule": true
+      },
+      "x86_64-apple-darwin": {
+        "linkerArgs": ["-undefined", "dynamic_lookup"],
+        "napiModule": true
+      }
+    }
+  }
+}

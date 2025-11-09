@@ -1,31 +1,13 @@
 {
   "name": "miniaudio_node",
   "version": "1.0.0",
-  "description": "High-performance native audio playback for Bun/Node.js",
-  "type": "module",
-  "main": "index.js",
-  "types": "index.d.ts",
-  "exports": {
-    ".": {
-      "import": "./index.js",
-      "types": "./index.d.ts"
-    }
-  },
-  "files": [
-    "index.js",
-    "index.d.ts",
-    "types.d.ts",
-    "*.node"
-  ],
   "scripts": {
-    "build": "node scripts/build-fix.js",
+    "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
     "build:watch": "napi build --platform --watch",
     "test": "bun test",
-    "test:watch": "bun test --watch",
     "clean": "napi clean && cargo clean",
-    "prepublishOnly": "napi prepublish -t npm && bun test",
-    "artifacts": "napi artifacts"
+    "prepublishOnly": "napi prepublish -t npm && bun test"
   },
   "devDependencies": {
     "@napi-rs/cli": "^2.18.0"
@@ -47,7 +29,5 @@
   "engines": {
     "bun": ">=1.0.0",
     "node": ">=18.0.0"
-  },
-  "repository": "https://github.com/audio-dev/miniaudio_node.git",
-  "license": "MIT"
+  }
 }
