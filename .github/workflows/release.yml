@@ -104,6 +104,24 @@ jobs:
         run: bunx napi build --platform --release --target ${{ matrix.target }}
         shell: bash
 
+      - name: Prepare artifact for upload
+        run: |
+          # Rename the generated .node file to the expected artifact name
+          if [ -f "miniaudio_node.node" ]; then
+            mv miniaudio_node.node ${{ matrix.artifact }}
+          else
+            # Find the generated .node file if it has a different name
+            NODE_FILE=$(find . -name "*.node" -type f | head -n 1)
+            if [ -n "$NODE_FILE" ]; then
+              mv "$NODE_FILE" ${{ matrix.artifact }}
+            else
+              echo "❌ No .node file found after build"
+              ls -la
+              exit 1
+            fi
+          fi
+          ls -la ${{ matrix.artifact }}
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -134,8 +152,29 @@ jobs:
       - name: Organize release files
         run: |
           mkdir -p release
-          find artifacts -name "*.node" -exec mv {} release/ \;
+          # Find and copy all .node files from their artifact directories
+          find artifacts -name "*.node" -type f -exec cp {} release/ \;
           ls -la release/
+
+          # Verify we have all expected artifacts
+          echo "Checking for expected release files:"
+          ls -la release/
+
+          # Verify specific files
+          for file in miniaudio_node.darwin-x64.node miniaudio_node.linux-x64-gnu.node miniaudio_node.darwin-arm64.node miniaudio_node.win32-x64-msvc.node; do
+            if [ -f "release/$file" ]; then
+              echo "✅ Found $file"
+            else
+              echo "❌ Missing $file"
+            fi
+          done
+
+          # Show debug info if files are missing
+          if ! ls release/*.node 1> /dev/null 2>&1; then
+            echo "No .node files found in release/, showing artifacts structure:"
+            ls -la artifacts/ || true
+            find artifacts -type f -name "*.node" || true
+          fi
 
       - name: Create package.json for distribution
         run: |
