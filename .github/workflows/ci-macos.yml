@@ -89,7 +89,10 @@ jobs:
         run: bun install
 
       - name: Build native module
-        run: bunx napi build --platform
+        run: bunx napi build --platform --verbose
+
+      - name: Check native module
+        run: ls -la *.node || echo "No .node files found"
 
       - name: Run tests
         run: bun test
@@ -147,7 +150,7 @@ jobs:
         run: |
           if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
             # Build for ARM64 with proper NAPI linking
-            bunx napi build --target ${{ matrix.target }} --release --cargo-flags="-C link-arg=-undefined -C link-arg=dynamic_lookup"
+            bunx napi build --target ${{ matrix.target }} --release
           else
             # Normal build for x86_64 (default includes audio)
             bunx napi build --target ${{ matrix.target }} --release
