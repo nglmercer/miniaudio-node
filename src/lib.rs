@@ -1,6 +1,8 @@
 //! Audio FFI - High-performance native audio playback for Node.js/Bun
 //! Implementation with rodio (pure Rust audio library)
 
+#![allow(clippy::arc_with_non_send_sync)]
+
 use napi::{Error, Result, Status};
 use napi_derive::napi;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
@@ -8,7 +10,6 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::rc::Rc;
 use std::thread;
 use std::time::Duration;
 // Usaremos OutputStream en cada instancia de AudioPlayer
@@ -39,8 +40,8 @@ pub struct AudioPlayer {
     state: Arc<Mutex<PlaybackState>>,
     duration: Arc<Mutex<f64>>,
     sink: Arc<Mutex<Option<Sink>>>,
-    output_stream: Rc<Mutex<Option<OutputStream>>>,
-    stream_handle: Rc<Mutex<Option<OutputStreamHandle>>>,
+    output_stream: Arc<Mutex<Option<OutputStream>>>,
+    stream_handle: Arc<Mutex<Option<OutputStreamHandle>>>,
 }
 
 impl Default for AudioPlayer {
@@ -51,8 +52,8 @@ impl Default for AudioPlayer {
             state: Arc::new(Mutex::new(PlaybackState::Stopped)),
             duration: Arc::new(Mutex::new(0.0)),
             sink: Arc::new(Mutex::new(None)),
-            output_stream: Rc::new(Mutex::new(None)),
-            stream_handle: Rc::new(Mutex::new(None)),
+            output_stream: Arc::new(Mutex::new(None)),
+            stream_handle: Arc::new(Mutex::new(None)),
         }
     }
 }
