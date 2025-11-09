@@ -70,9 +70,10 @@ jobs:
           node-version: ${{ matrix.node-version }}
 
       - name: Install Bun
-        uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
+        run: |
+          powershell -c "irm bun.sh/install.ps1 | iex"
+          echo "$env:USERPROFILE\.bun\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: powershell
 
       - name: Verify Bun installation
         run: |
@@ -148,6 +149,17 @@ jobs:
           key: windows-latest-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             windows-latest-${{ matrix.target }}-cargo-
+
+      - name: Install Bun
+        run: |
+          powershell -c "irm bun.sh/install.ps1 | iex"
+          echo "$env:USERPROFILE\.bun\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: powershell
+
+      - name: Verify Bun installation
+        run: |
+          bun --version
+        shell: powershell
 
       - name: Install dependencies
         run: bun install
