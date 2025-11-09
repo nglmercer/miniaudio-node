@@ -15,11 +15,8 @@ crate-type = ["cdylib"]
 name = "miniaudio_node"
 
 [package.metadata.napi]
-# Generate TypeScript definitions
 ts-gen = true
-# Use camelCase for better JS compatibility
 js-suffix = ".js"
-# Generate .d.ts files
 dts-gen = true
 targets = [
   "x86_64-pc-windows-msvc",
@@ -30,41 +27,26 @@ targets = [
   "aarch64-unknown-linux-gnu"
 ]
 
-[package.metadata.napi.custom-targets."x86_64-pc-windows-msvc"]
-dart-define = ["FLUTTER_TARGET_OS=windows"]
-
-[package.metadata.napi.custom-targets."aarch64-apple-darwin"]
-dart-define = ["FLUTTER_TARGET_OS=macos", "FLUTTER_TARGET_ARCH=arm64"]
-
-[package.metadata.napi.custom-targets."aarch64-unknown-linux-gnu"]
-rust-flags = ["-C", "link-arg=-Wl,--as-needed"]
-
-[package.metadata.napi.custom-targets."aarch64-pc-windows-msvc"]
-rust-flags = ["-C", "target-feature=+neon"]
+# [package.metadata.napi.custom-targets...] (mantén las existentes)
 
 [dependencies]
-# Core dependencies
 napi = { version = "2.16", features = ["napi4", "serde-json"] }
 napi-derive = "2.16"
-cpal = { version = "0.15", optional = true }
+rodio = "0.19.0"
 
-# Error handling and utilities
+# Error handling
 anyhow = "1.0"
 thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# Async support
+# Async support (opcional)
 tokio = { version = "1.0", features = ["rt-multi-thread", "sync"], optional = true }
-
-[build-dependencies]
-napi-build = "2.1"
-cc = "1.0"
 
 [features]
 default = ["audio"]
 async = ["tokio"]
-audio = ["cpal"]
+audio = []  # miniaudio no necesita habilitar features adicionales
 
 [profile.release]
 lto = true

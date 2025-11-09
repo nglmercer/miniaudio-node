@@ -34,7 +34,7 @@ export interface AudioMetadata {
   album?: string
 }
 export declare function getAudioMetadata(filePath: string): AudioMetadata
-/** Thread-safe audio player with proper resource management */
+/** Thread-safe audio player with rodio backend */
 export declare class AudioPlayer {
   constructor()
   getDevices(): Array<AudioDeviceInfo>
