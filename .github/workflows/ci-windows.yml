@@ -44,6 +44,12 @@ jobs:
           restore-keys: |
             windows-latest-cargo-
 
+      - name: Setup NAPI environment
+        run: |
+          # Set environment variables for proper NAPI linking
+          echo "NAPI_RS_LINK_TYPE=dynamic" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "RUSTFLAGS=-C target-feature=+crt-static" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Normalize line endings and check Rust formatting
         run: |
           # Ensure LF line endings before checking formatting
@@ -56,9 +62,10 @@ jobs:
         run: |
           cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Run Rust tests
+      - name: Run Rust tests (skip audio tests)
         run: |
-          cargo test --verbose
+          # Skip audio initialization tests in CI environment
+          cargo test --verbose -- --skip test_initialize_audio
 
   node-tests-windows:
     name: Node.js Tests (Windows)
@@ -97,7 +104,11 @@ jobs:
         shell: powershell
 
       - name: Build native module
-        run: bunx napi build --platform
+        run: |
+          # Set NAPI environment for proper linking
+          $env:NAPI_RS_LINK_TYPE="dynamic"
+          $env:RUSTFLAGS="-C target-feature=+crt-static"
+          bunx napi build --platform
         shell: powershell
 
       - name: Check native module
@@ -141,6 +152,12 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
+
+      - name: Setup NAPI environment
+        run: |
+          # Set environment variables for proper NAPI linking
+          echo "NAPI_RS_LINK_TYPE=dynamic" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "RUSTFLAGS=-C target-feature=+crt-static" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       # Temporarily disabled due to rodio linking issues with NAPI on arm64
       # - name: Setup cross-compilation environment
