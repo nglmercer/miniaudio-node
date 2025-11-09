@@ -76,19 +76,32 @@ jobs:
       - name: Verify and rename artifact
         run: |
           mkdir -p dist
-          # Buscar el archivo .node en el directorio específico del target
-          NODE_FILE=$(find target/${{ matrix.target }}/release -name "*.node" -type f | head -n 1)
+
+          # Buscar en la raíz del proyecto primero (donde napi-cli lo genera)
+          NODE_FILE=$(find . -maxdepth 1 -name "*.node" -type f | head -n 1)
+
           if [ -n "$NODE_FILE" ]; then
+            # Archivo encontrado en la raíz
             cp "$NODE_FILE" "dist/${{ matrix.artifact_name }}"
-            echo "✅ Artifact created: dist/${{ matrix.artifact_name }}"
-            file "dist/${{ matrix.artifact_name }}"
-            otool -L "dist/${{ matrix.artifact_name }}" || true
+            echo "✅ Artifact found in root and copied to dist/${{ matrix.artifact_name }}"
           else
-            echo "❌ No .node file found for target ${{ matrix.target }}"
-            echo "Contents of target/:"
-            find target -name "*.node" -o -name "*.dylib" || true
-            exit 1
+            NODE_FILE=$(find target/${{ matrix.target }}/release -name "*.node" -type f 2>/dev/null | head -n 1)
+
+            if [ -n "$NODE_FILE" ]; then
+              cp "$NODE_FILE" "dist/${{ matrix.artifact_name }}"
+              echo "✅ Artifact found in target dir and copied to dist/${{ matrix.artifact_name }}"
+            else
+              echo "❌ No .node file found anywhere"
+              echo "--- Root directory contents ---"
+              ls -la *.node 2>/dev/null || echo "No .node files in root"
+              echo "--- target directory contents ---"
+              find target -name "*.node" -o -name "*.dylib" 2>/dev/null || true
+              exit 1
+            fi
           fi
+
+          file "dist/${{ matrix.artifact_name }}"
+          otool -L "dist/${{ matrix.artifact_name }}" || true
 
       - uses: actions/upload-artifact@v4
         with:
