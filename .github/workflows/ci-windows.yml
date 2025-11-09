@@ -93,6 +93,10 @@ jobs:
         run: bunx napi build --platform
         shell: powershell
 
+      - name: Check native module
+        run: ls *.node || echo "No .node files found"
+        shell: powershell
+
       - name: Run tests
         run: bun test
 

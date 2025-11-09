@@ -100,7 +100,7 @@ jobs:
         run: bun install
 
       - name: Build native module
-        run: bunx napi build --platform --verbose
+        run: bunx napi build --platform
 
       - name: Check native module
         run: ls -la *.node || echo "No .node files found"
