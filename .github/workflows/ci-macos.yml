@@ -144,7 +144,7 @@ jobs:
         run: bun install
 
       - name: Build native binary
-        run: bunx napi build --target ${{ matrix.target }} --release
+        run: bunx napi build --target ${{ matrix.target }} --release --cargo-flags="-C link-arg=-lnode"
 
       - name: Prepare artifact
         run: |
