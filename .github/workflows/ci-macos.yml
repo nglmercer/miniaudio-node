@@ -9,15 +9,24 @@ on:
 env:
   RUST_TOOLCHAIN: stable
   NODE_VERSION: "20"
+  MACOSX_DEPLOYMENT_TARGET: "10.15" # Añadido para consistencia
 
 jobs:
   rust-tests-macos:
     name: Rust Tests (macOS)
     runs-on: macos-latest
+    timeout-minutes: 30 # Prevenir timeouts silenciosos
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Install macOS development tools
+        run: |
+          # Asegurar que Xcode Command Line Tools están instaladas
+          xcode-select --install || true
+          # Verificar instalación
+          xcode-select -p
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -38,25 +47,23 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target/
-          key: macos-latest-cargo-${{ hashFiles('Cargo.lock') }}
+          key: macos-latest-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             macos-latest-cargo-
 
       - name: Check Rust formatting
-        run: |
-          cargo fmt --all -- --check
+        run: cargo fmt --all -- --check
 
       - name: Rust linting
-        run: |
-          cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run Rust tests
-        run: |
-          cargo test --verbose
+        run: cargo test --verbose
 
   node-tests-macos:
     name: Node.js Tests (macOS)
     runs-on: macos-latest
+    timeout-minutes: 45 # NAPI build puede tardar
     strategy:
       matrix:
         node-version: [18, 20]
@@ -75,31 +82,48 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            node_modules
-            .bun-cache
-            ~/.npm
-          key: macos-latest-${{ matrix.node-version }}-deps-${{ hashFiles('package.json', 'bun.lock') }}
-          restore-keys: |
-            macos-latest-${{ matrix.node-version }}-deps-
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: x86_64-apple-darwin
 
+      - name: Setup NAPI environment
+        run: |
+          # CRUCIAL: Establecer linking dinámico para macOS
+          echo "NAPI_RS_LINK_TYPE=dynamic" >> $GITHUB_ENV
+          echo "MACOSX_DEPLOYMENT_TARGET=${{ env.MACOSX_DEPLOYMENT_TARGET }}" >> $GITHUB_ENV
+          # Verificar entorno
+          echo "Rust version:" $(rustc --version)
+          echo "Cargo version:" $(cargo --version)
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            ~/.bun/install/cache
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: macos-${{ matrix.node-version }}-deps-${{ hashFiles('**/package.json', '**/bun.lock', '**/Cargo.lock') }}
+          restore-keys: |
+            macos-${{ matrix.node-version }}-deps-
+
       - name: Install dependencies
         run: bun install
 
       - name: Build native module
-        run: bunx napi build --platform --release
+        run: |
+          # Verificar que napi está disponible
+          bunx --yes @napi-rs/cli --version
+          # Compilar con verbose para ver errores detallados
+          bunx napi build --platform --release --verbose
 
       - name: Check native module
-        run: ls -la *.node || echo "No .node files found"
+        run: |
+          echo "Buscando archivos .node:"
+          find . -name "*.node" -type f || echo "No .node files found"
+          ls -la *.node 2>/dev/null || true
 
       - name: Run tests
         run: bun test
@@ -108,14 +132,17 @@ jobs:
     name: Build macOS Binaries
     needs: [rust-tests-macos, node-tests-macos]
     runs-on: macos-latest
+    timeout-minutes: 60 # Cross-compilación necesita más tiempo
     strategy:
       matrix:
         include:
           - target: x86_64-apple-darwin
             artifact_name: miniaudio_node.darwin-x64.node
-          # Temporarily disabled due to rodio linking issues with NAPI on arm64
-          # - target: aarch64-apple-darwin
-          #   artifact_name: miniaudio_node.darwin-arm64.node
+            sdk: macosx
+          # Habilitar ARM64 con fixes
+          - target: aarch64-apple-darwin
+            artifact_name: miniaudio_node.darwin-arm64.node
+            sdk: macosx
 
     steps:
       - name: Checkout code
@@ -134,8 +161,30 @@ jobs:
 
       - name: Install macOS dependencies
         run: |
-          # Install required tools for cross-compilation
+          # Instalar LLVM para herramientas de cross-compilación
           brew install llvm
+          # Asegurar que pkg-config está disponible
+          brew install pkg-config
+
+      - name: Setup SDK and environment
+        run: |
+          # Establecer SDK de macOS
+          SDK_PATH=$(xcrun --sdk ${{ matrix.sdk }} --show-sdk-path)
+          echo "SDKROOT=$SDK_PATH" >> $GITHUB_ENV
+          echo "MACOSX_DEPLOYMENT_TARGET=${{ env.MACOSX_DEPLOYMENT_TARGET }}" >> $GITHUB_ENV
+          echo "NAPI_RS_LINK_TYPE=dynamic" >> $GITHUB_ENV
+
+          # Configurar LLVM para cross-compilación
+          LLVM_PATH=$(brew --prefix llvm)
+          echo "$LLVM_PATH/bin" >> $GITHUB_PATH
+          echo "CC_${{ matrix.target }}=$LLVM_PATH/bin/clang" >> $GITHUB_ENV
+          echo "CXX_${{ matrix.target }}=$LLVM_PATH/bin/clang++" >> $GITHUB_ENV
+
+          # Variables específicas para ARM64
+          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            echo "CFLAGS_aarch64_apple_darwin=-arch arm64" >> $GITHUB_ENV
+            echo "CXXFLAGS_aarch64_apple_darwin=-arch arm64" >> $GITHUB_ENV
+          fi
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -144,40 +193,32 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target/
-          key: macos-latest-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
+          key: macos-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            macos-latest-${{ matrix.target }}-cargo-
-
-      - name: Setup cross-compilation environment
-        run: |
-          # Set SDK paths for cross-compilation
-          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
-            echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> $GITHUB_ENV
-            echo "MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)" >> $GITHUB_ENV
-          fi
-          # Add LLVM to PATH for cross-compilation tools
-          echo "/usr/local/opt/llvm/bin" >> $GITHUB_PATH
-        shell: bash
+            macos-${{ matrix.target }}-cargo-
 
       - name: Install dependencies
         run: bun install
 
-      - name: Setup NAPI environment
-        run: |
-          # Ensure proper NAPI linking for macOS
-          echo "NAPI_RS_LINK_TYPE=dynamic" >> $GITHUB_ENV
-
       - name: Build native binary
-        run: bunx napi build --target ${{ matrix.target }} --release
+        run: |
+          bunx --yes @napi-rs/cli --version
+          bunx napi build --target ${{ matrix.target }} --release --verbose
 
-      - name: Prepare artifact
+      - name: Verify and prepare artifact
         run: |
           mkdir -p dist
-          if [ -f "miniaudio_node.node" ]; then
-            cp miniaudio_node.node "dist/${{ matrix.artifact_name }}"
+          # Buscar el archivo .node con nombre específico o genérico
+          NODE_FILE=$(find . -name "*.node" -type f | head -n 1)
+          if [ -n "$NODE_FILE" ]; then
+            echo "Found native module: $NODE_FILE"
+            cp "$NODE_FILE" "dist/${{ matrix.artifact_name }}"
+            file "dist/${{ matrix.artifact_name }}"
           else
-            echo "Warning: miniaudio_node.node not found"
-            ls -la *.node 2>/dev/null || echo "No .node files found"
+            echo "ERROR: No .node file found after build"
+            echo "Files in current directory:"
+            ls -la
+            exit 1
           fi
 
       - name: Upload binary artifact
@@ -185,3 +226,4 @@ jobs:
         with:
           name: ${{ matrix.artifact_name }}
           path: dist/
+          retention-days: 7
