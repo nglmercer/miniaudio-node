@@ -46,7 +46,7 @@ rust-flags = ["-C", "target-feature=+neon"]
 # Core dependencies
 napi = { version = "2.16", features = ["napi4", "serde-json"] }
 napi-derive = "2.16"
-rodio = { version = "0.17", features = ["wav", "mp3", "flac", "vorbis"], optional = true }
+cpal = { version = "0.15", optional = true }
 
 # Error handling and utilities
 anyhow = "1.0"
@@ -62,8 +62,9 @@ napi-build = "2.1"
 cc = "1.0"
 
 [features]
-default = []
+default = ["audio"]
 async = ["tokio"]
+audio = ["cpal"]
 
 [profile.release]
 lto = true
