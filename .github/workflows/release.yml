@@ -6,7 +6,7 @@ on:
 
 env:
   RUST_TOOLCHAIN: stable
-  NODE_VERSION: '20'
+  NODE_VERSION: "20"
 
 jobs:
   # Wait for all platform builds to complete
@@ -22,7 +22,7 @@ jobs:
     needs: wait-for-builds
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -36,7 +36,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          registry-url: 'https://registry.npmjs.org'
+          registry-url: "https://registry.npmjs.org"
 
       - name: Install Bun
         run: |
@@ -49,7 +49,7 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -60,7 +60,7 @@ jobs:
             ubuntu-latest-cargo-
 
       - name: Cache dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             node_modules
@@ -74,7 +74,7 @@ jobs:
         run: bun install
 
       - name: Download all platform binaries
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           path: dist/
         continue-on-error: true
@@ -88,15 +88,15 @@ jobs:
         run: |
           # Create native directory structure
           mkdir -p native
-          
+
           # Move all .node files to native directory
           find dist/ -name "*.node" -exec cp {} native/ \;
-          
+
           # Copy Rust source for reproducibility
           cp src/*.rs native/ 2>/dev/null || true
           cp Cargo.toml native/ 2>/dev/null || true
           cp build.rs native/ 2>/dev/null || true
-          
+
           # List native directory contents
           echo "Native directory contents:"
           ls -la native/
@@ -111,7 +111,7 @@ jobs:
         run: |
           # Create distribution directory
           mkdir -p dist-package
-          
+
           # Copy necessary files
           cp -r native/ dist-package/
           cp index.js dist-package/
@@ -119,11 +119,11 @@ jobs:
           cp README.md dist-package/
           cp LICENSE dist-package/
           cp docs/CHANGELOG.md dist-package/ 2>/dev/null || echo "# Changelog" > dist-package/CHANGELOG.md
-          
+
           # Copy package.json and modify for npm
           cp package.json dist-package/
           cd dist-package
-          
+
           # Update package.json for npm publication
           node -e "
             const pkg = JSON.parse(require('fs').readFileSync('package.json', 'utf8'));
@@ -134,7 +134,7 @@ jobs:
             delete pkg.devDependencies;
             require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2));
           "
-          
+
           # List final package contents
           echo "Final package contents:"
           ls -la
@@ -170,16 +170,13 @@ jobs:
           cd dist-package
           tar -czf ../miniaudio-node-${{ github.event.release.tag_name }}.tar.gz .
           cd ..
-          
+
       - name: Upload release asset
-        uses: actions/upload-release-asset@v1
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ./miniaudio-node-${{ github.event.release.tag_name }}.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./miniaudio-node-${{ github.event.release.tag_name }}.tar.gz
-          asset_name: miniaudio-node-${{ github.event.release.tag_name }}.tar.gz
-          asset_content_type: application/gzip
 
       - name: Publish to npm
         run: |

@@ -22,13 +22,13 @@ on:
 
 env:
   RUST_TOOLCHAIN: stable
-  NODE_VERSION: '20'
+  NODE_VERSION: "20"
 
 jobs:
   setup-rust:
     name: Setup Rust (${{ inputs.os }})
     runs-on: ${{ inputs.os }}
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -47,7 +47,7 @@ jobs:
           targets: ${{ inputs.target || '' }}
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -60,7 +60,7 @@ jobs:
   setup-node:
     name: Setup Node.js (${{ inputs.os }}, Node ${{ inputs.node-version }})
     runs-on: ${{ inputs.os }}
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -89,7 +89,7 @@ jobs:
           echo "$HOME/.bun/bin" >> $GITHUB_PATH
 
       - name: Cache dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             node_modules

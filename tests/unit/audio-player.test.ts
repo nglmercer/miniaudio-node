@@ -336,8 +336,8 @@ describe('Error Handling', () => {
     const player = new AudioPlayer()
 
     expect(() => player.loadFile('')).toThrow()
-    expect(() => player.loadFile(null)).toThrow()
-    expect(() => player.loadFile(undefined)).toThrow()
+    expect(() => player.loadFile(null as any)).toThrow()
+    expect(() => player.loadFile(undefined as any)).toThrow()
   })
 })
 
