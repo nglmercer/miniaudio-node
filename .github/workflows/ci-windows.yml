@@ -89,7 +89,7 @@ jobs:
         run: bun install
 
       - name: Build native module
-        run: napi build --platform
+        run: bunx napi build --platform
 
       - name: Run tests
         run: bun test
@@ -138,8 +138,8 @@ jobs:
         run: bun install
 
       - name: Build native binary
-       run: |
-         napi build --target ${{ matrix.target }} --release --cargo-flags="-C link-arg=-Wl,-undefined,dynamic_lookup"
+        run: |
+          bunx napi build --target ${{ matrix.target }} --release --cargo-flags="-C link-arg=-Wl,-undefined,dynamic_lookup"
 
       - name: Prepare artifact
         run: |
