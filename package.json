@@ -6,9 +6,15 @@
     "build:debug": "napi build --platform",
     "build:watch": "napi build --platform --watch",
     "test": "bun test",
-    "clean": "napi clean && cargo clean",
-    "prepublishOnly": "napi prepublish -t npm && bun test"
+    "clean": "napi clean && cargo clean"
   },
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node"
+  ],
   "devDependencies": {
     "@napi-rs/cli": "^2.18.0"
   },
@@ -27,7 +33,6 @@
     }
   },
   "engines": {
-    "bun": ">=1.0.0",
     "node": ">=18.0.0"
   }
 }

@@ -185,24 +185,12 @@ jobs:
 
       - name: Create package.json for distribution
         run: |
-          # Create platform-specific directories for npm
-          mkdir -p release/win32-x64-msvc
-          mkdir -p release/darwin-x64
-          mkdir -p release/darwin-arm64
-          mkdir -p release/linux-x64-gnu
-
-          # Copy .node files to correct npm structure
-          cp release/miniaudio_node.win32-x64-msvc.node release/win32-x64-msvc/miniaudio_node.win32-x64-msvc.node || echo "Windows x64 file not found"
-          cp release/miniaudio_node.darwin-x64.node release/darwin-x64/miniaudio_node.darwin-x64.node || echo "macOS x64 file not found"
-          cp release/miniaudio_node.darwin-arm64.node release/darwin-arm64/miniaudio_node.darwin-arm64.node || echo "macOS ARM64 file not found"
-          cp release/miniaudio_node.linux-x64-gnu.node release/linux-x64-gnu/miniaudio_node.linux-x64-gnu.node || echo "Linux x64 file not found"
-
-          # Extract version from git tag
+          # Extract version from git tag and update package.json
           VERSION=$(echo ${{ github.ref_name }} | sed 's/^v//')
+          sed -i "s/\"version\": \"1.0.0\"/\"version\": \"$VERSION\"/" package.json
 
-          # Create package.json for npm WITHOUT prepublishOnly script
-          cp package.json release/package.json
-
+          # Copy files for release
+          cp package.json release/
           cp index.js release/
           cp index.d.ts release/
 
@@ -225,4 +213,4 @@ jobs:
       - name: Publish to npm (Trusted Publisher)
         run: |
           cd release
-          npm publish --access public --tag latest
+          npm publish --access public --tag latest --ignore-scripts
