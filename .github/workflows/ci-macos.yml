@@ -67,7 +67,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build native binary
-        run: bun run build -- --target ${{ matrix.target }} --verbose
+        run: bun run build -- --target ${{ matrix.target }}
         env:
           FORCE_COLOR: 1
           RUST_BACKTRACE: 1
