@@ -45,6 +45,7 @@ jobs:
         run: |
           git config --global core.autocrlf input
           git config --global core.eol lf
+          Write-Output "Git configured for LF line endings"
         shell: powershell
 
       - name: Check Rust formatting
