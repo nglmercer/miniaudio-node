@@ -185,27 +185,28 @@ jobs:
 
       - name: Create package.json for distribution
         run: |
-          # Create npm package structure
-          mkdir -p release/npm
-
-          # Create simplified package.json for npm (without prepublishOnly)
-          cp package.json release/npm/package.json
-          cp index.js release/npm/
-          cp index.d.ts release/npm/
-
           # Create platform-specific directories for npm
-          mkdir -p release/npm/win32-x64-msvc
-          mkdir -p release/npm/darwin-x64
-          mkdir -p release/npm/darwin-arm64
-          mkdir -p release/npm/linux-x64-gnu
+          mkdir -p release/win32-x64-msvc
+          mkdir -p release/darwin-x64
+          mkdir -p release/darwin-arm64
+          mkdir -p release/linux-x64-gnu
 
           # Copy .node files to correct npm structure
-          cp release/miniaudio_node.win32-x64-msvc.node release/npm/win32-x64-msvc/miniaudio_node.win32-x64-msvc.node || echo "Windows x64 file not found"
-          cp release/miniaudio_node.darwin-x64.node release/npm/darwin-x64/miniaudio_node.darwin-x64.node || echo "macOS x64 file not found"
-          cp release/miniaudio_node.darwin-arm64.node release/npm/darwin-arm64/miniaudio_node.darwin-arm64.node || echo "macOS ARM64 file not found"
-          cp release/miniaudio_node.linux-x64-gnu.node release/npm/linux-x64-gnu/miniaudio_node.linux-x64-gnu.node || echo "Linux x64 file not found"
+          cp release/miniaudio_node.win32-x64-msvc.node release/win32-x64-msvc/miniaudio_node.win32-x64-msvc.node || echo "Windows x64 file not found"
+          cp release/miniaudio_node.darwin-x64.node release/darwin-x64/miniaudio_node.darwin-x64.node || echo "macOS x64 file not found"
+          cp release/miniaudio_node.darwin-arm64.node release/darwin-arm64/miniaudio_node.darwin-arm64.node || echo "macOS ARM64 file not found"
+          cp release/miniaudio_node.linux-x64-gnu.node release/linux-x64-gnu/miniaudio_node.linux-x64-gnu.node || echo "Linux x64 file not found"
 
-          ls -la release/npm/
+          # Extract version from git tag
+          VERSION=$(echo ${{ github.ref_name }} | sed 's/^v//')
+
+          # Create package.json for npm WITHOUT prepublishOnly script
+          cp package.json release/package.json
+
+          cp index.js release/
+          cp index.d.ts release/
+
+          ls -la release/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
@@ -221,10 +222,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish to npm
+      - name: Publish to npm (Trusted Publisher)
         run: |
-          cd release/npm
-          npm config set //registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}
-          npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          cd release
+          npm publish --access public --tag latest
