@@ -89,7 +89,7 @@ jobs:
         run: bun install
 
       - name: Build native module
-        run: bun run build
+        run: bun run build:debug
 
       - name: Run tests
         run: bun test
@@ -132,12 +132,17 @@ jobs:
           restore-keys: |
             macos-latest-${{ matrix.target }}-cargo-
 
+      - name: Install Zig for cross-compilation
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: latest
+
       - name: Install dependencies
         run: bun install
 
       - name: Build native binary
         run: |
-          napi build --target ${{ matrix.target }} --release
+          napi build --target ${{ matrix.target }} --release --zig
 
       - name: Prepare artifact
         run: |
