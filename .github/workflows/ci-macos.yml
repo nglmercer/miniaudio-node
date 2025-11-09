@@ -89,7 +89,7 @@ jobs:
         run: bun install
 
       - name: Build native module
-        run: bunx napi build --platform
+        run: bunx napi build --platform --release
 
       - name: Check native module
         run: ls -la *.node || echo "No .node files found"
@@ -106,8 +106,9 @@ jobs:
         include:
           - target: x86_64-apple-darwin
             artifact_name: miniaudio_node.darwin-x64.node
-          - target: aarch64-apple-darwin
-            artifact_name: miniaudio_node.darwin-arm64.node
+          # Temporarily disabled due to rodio linking issues with NAPI on arm64
+          # - target: aarch64-apple-darwin
+          #   artifact_name: miniaudio_node.darwin-arm64.node
 
     steps:
       - name: Checkout code
@@ -135,31 +136,30 @@ jobs:
           restore-keys: |
             macos-latest-${{ matrix.target }}-cargo-
 
-      - name: Setup cross-compilation environment
-        if: matrix.target == 'aarch64-apple-darwin'
-        run: |
-          echo "Setting up ARM64 cross-compilation environment"
-          echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> $GITHUB_ENV
-          echo "MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)" >> $GITHUB_ENV
-        shell: bash
+      # Temporarily disabled due to rodio linking issues with NAPI on arm64
+      # - name: Setup cross-compilation environment
+      #   if: matrix.target == 'aarch64-apple-darwin'
+      #   run: |
+      #     echo "Setting up ARM64 cross-compilation environment"
+      #     echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> $GITHUB_ENV
+      #     echo "MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)" >> $GITHUB_ENV
+      #   shell: bash
 
       - name: Install dependencies
         run: bun install
 
       - name: Build native binary
-        run: |
-          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
-            # Build for ARM64 with proper NAPI linking
-            bunx napi build --target ${{ matrix.target }} --release
-          else
-            # Normal build for x86_64 (default includes audio)
-            bunx napi build --target ${{ matrix.target }} --release
-          fi
+        run: bunx napi build --target ${{ matrix.target }} --release
 
       - name: Prepare artifact
         run: |
           mkdir -p dist
-          cp miniaudio_node.node dist/${{ matrix.artifact_name }}
+          if [ -f "miniaudio_node.node" ]; then
+            cp miniaudio_node.node "dist/${{ matrix.artifact_name }}"
+          else
+            echo "Warning: miniaudio_node.node not found"
+            ls -la *.node 2>/dev/null || echo "No .node files found"
+          fi
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4

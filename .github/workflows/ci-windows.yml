@@ -94,7 +94,12 @@ jobs:
         shell: powershell
 
       - name: Check native module
-        run: ls *.node || echo "No .node files found"
+        run: |
+          if (Test-Path "*.node") {
+            Get-ChildItem "*.node" | Select-Object Name
+          } else {
+            Write-Output "No .node files found"
+          }
         shell: powershell
 
       - name: Run tests
@@ -111,8 +116,9 @@ jobs:
             artifact_name: miniaudio_node.win32-x64-msvc.node
           - target: i686-pc-windows-msvc
             artifact_name: miniaudio_node.win32-ia32-msvc.node
-          - target: aarch64-pc-windows-msvc
-            artifact_name: miniaudio_node.win32-arm64-msvc.node
+          # Temporarily disabled due to rodio linking issues with NAPI on arm64
+          # - target: aarch64-pc-windows-msvc
+          #   artifact_name: miniaudio_node.win32-arm64-msvc.node
 
     steps:
       - name: Checkout code
@@ -129,13 +135,14 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
 
-      - name: Setup cross-compilation environment
-        if: matrix.target == 'aarch64-pc-windows-msvc'
-        run: |
-          echo "Setting up ARM64 cross-compilation environment"
-          echo "CC_aarch64_pc_windows_msvc=clang-cl" >> $env:GITHUB_ENV
-          echo "CXX_aarch64_pc_windows_msvc=clang-cl" >> $env:GITHUB_ENV
-        shell: powershell
+      # Temporarily disabled due to rodio linking issues with NAPI on arm64
+      # - name: Setup cross-compilation environment
+      #   if: matrix.target == 'aarch64-pc-windows-msvc'
+      #   run: |
+      #     Write-Output "Setting up ARM64 cross-compilation environment"
+      #     echo "CC_aarch64_pc_windows_msvc=clang-cl" | Out-File -FilePath $env:GITHUB_ENV -Append
+      #     echo "CXX_aarch64_pc_windows_msvc=clang-cl" | Out-File -FilePath $env:GITHUB_ENV -Append
+      #   shell: powershell
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -163,8 +170,9 @@ jobs:
 
       - name: Prepare artifact
         run: |
-          mkdir -p dist
-          cp miniaudio_node.node dist/${{ matrix.artifact_name }}
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item miniaudio_node.node "dist/${{ matrix.artifact_name }}"
+        shell: powershell
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
