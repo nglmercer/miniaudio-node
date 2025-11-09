@@ -123,6 +123,14 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
 
+      - name: Setup cross-compilation environment
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: |
+          echo "Setting up ARM64 cross-compilation environment"
+          echo "CC_aarch64_pc_windows_msvc=clang-cl" >> $env:GITHUB_ENV
+          echo "CXX_aarch64_pc_windows_msvc=clang-cl" >> $env:GITHUB_ENV
+        shell: powershell
+
       - name: Cache Rust dependencies
         uses: actions/cache@v4
         with:
@@ -138,8 +146,7 @@ jobs:
         run: bun install
 
       - name: Build native binary
-        run: |
-          bunx napi build --target ${{ matrix.target }} --release --cargo-flags="-C link-arg=-Wl,-undefined,dynamic_lookup"
+        run: bunx napi build --target ${{ matrix.target }} --release
 
       - name: Prepare artifact
         run: |

@@ -36,6 +36,12 @@ dart-define = ["FLUTTER_TARGET_OS=windows"]
 [package.metadata.napi.custom-targets."aarch64-apple-darwin"]
 dart-define = ["FLUTTER_TARGET_OS=macos", "FLUTTER_TARGET_ARCH=arm64"]
 
+[package.metadata.napi.custom-targets."aarch64-unknown-linux-gnu"]
+rust-flags = ["-C", "link-arg=-Wl,--as-needed"]
+
+[package.metadata.napi.custom-targets."aarch64-pc-windows-msvc"]
+rust-flags = ["-C", "target-feature=+neon"]
+
 [dependencies]
 # Core dependencies
 napi = { version = "2.16", features = ["napi4", "serde-json"] }

@@ -22,7 +22,14 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libpkgconf-dev
+          sudo apt-get install -y libasound2-dev libpkgconf-dev gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          sudo apt-get install -y libasound2-dev:arm64 libpkgconf-dev:arm64
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+
+      - name: Install Zig for cross-compilation
+        run: |
+          sudo apt-get install -y zig
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
@@ -118,12 +125,19 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libpkgconf-dev
+          sudo apt-get install -y libasound2-dev libpkgconf-dev gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          sudo apt-get install -y libasound2-dev:arm64 libpkgconf-dev:arm64
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Zig for cross-compilation
+        run: |
+          sudo apt-get install -y zig
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
@@ -142,6 +156,14 @@ jobs:
           restore-keys: |
             ubuntu-latest-${{ matrix.target }}-cargo-
 
+      - name: Setup cross-compilation environment
+        run: |
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
+          echo "PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu" >> $GITHUB_ENV
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
         with:
@@ -152,9 +174,11 @@ jobs:
 
       - name: Build native binary
         run: |
-          bunx napi build --target ${{ matrix.target }} --release
-          bunx napi build --target ${{ matrix.target }} --release --cargo-flags="-C link-arg=-Wl,-undefined,dynamic_lookup"
-          bunx napi build --target ${{ matrix.target }} --release --cargo-flags="-C link-arg=-Wl,-undefined,dynamic_lookup"
+          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+            bunx napi build --target ${{ matrix.target }} --release --cargo-flags="-C linker=aarch64-linux-gnu-gcc"
+          else
+            bunx napi build --target ${{ matrix.target }} --release
+          fi
 
       - name: Prepare artifact
         run: |
