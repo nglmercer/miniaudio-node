@@ -1,186 +1,115 @@
-name: Release
+name: Build and Release
 
 on:
-  release:
-    types: [published]
-
-env:
-  RUST_TOOLCHAIN: stable
-  NODE_VERSION: "20"
+  push:
+    tags: ["v*"]
 
 jobs:
-  # Wait for all platform builds to complete
-  wait-for-builds:
-    name: Wait for Platform Builds
-    runs-on: ubuntu-latest
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: miniaudio_node.win32-x64-msvc.node
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: miniaudio_node.darwin-x64.node
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: miniaudio_node.darwin-arm64.node
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: miniaudio_node.linux-x64-gnu.node
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: miniaudio_node.linux-arm64-gnu.node
+
     steps:
-      - name: Wait for builds
-        run: echo "All platform builds should complete before release"
-
-  release:
-    name: Release and Publish
-    needs: wait-for-builds
-    runs-on: ubuntu-latest
-    if: github.event_name == 'release'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev libpkgconf-dev
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          registry-url: "https://registry.npmjs.org"
+      - uses: actions/checkout@v4
 
       - name: Install Bun
-        run: |
-          curl -fsSL https://bun.sh/install | bash
-          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target/
-          key: ubuntu-latest-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ubuntu-latest-cargo-
-
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            node_modules
-            .bun-cache
-            ~/.npm
-          key: ubuntu-latest-20-deps-${{ hashFiles('package.json', 'bun.lockb') }}
-          restore-keys: |
-            ubuntu-latest-20-deps-
+          toolchain: stable
+          targets: ${{ matrix.target }}
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
-      - name: Download all platform binaries
+      - name: Setup Zig (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: "0.11.0"
+
+      - name: Build native module
+        run: |
+          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+            bunx napi build --platform --release --target ${{ matrix.target }} --zig
+          else
+            bunx napi build --platform --release --target ${{ matrix.target }}
+          fi
+        shell: bash
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+          retention-days: 1
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v1
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: dist/
-        continue-on-error: true
+          path: artifacts
 
-      - name: List downloaded artifacts
+      - name: Organize release files
         run: |
-          echo "Downloaded artifacts:"
-          find dist/ -type f -name "*.node" -exec echo "  {}" \;
+          mkdir -p release
+          find artifacts -name "*.node" -exec mv {} release/ \;
+          ls -la release/
 
-      - name: Prepare native directory
+      - name: Create package.json for distribution
         run: |
-          # Create native directory structure
-          mkdir -p native
+          bunx napi prepublish -t npm
+          cp package.json release/
+          cp index.js release/
+          cp index.d.ts release/
+          ls -la release/
 
-          # Move all .node files to native directory
-          find dist/ -name "*.node" -exec cp {} native/ \;
-
-          # Copy Rust source for reproducibility
-          cp src/*.rs native/ 2>/dev/null || true
-          cp Cargo.toml native/ 2>/dev/null || true
-          cp build.rs native/ 2>/dev/null || true
-
-          # List native directory contents
-          echo "Native directory contents:"
-          ls -la native/
-
-      - name: Build release package
-        run: bun run build
-
-      - name: Run final tests
-        run: bun test
-
-      - name: Prepare distribution package
-        run: |
-          # Create distribution directory
-          mkdir -p dist-package
-
-          # Copy necessary files
-          cp -r native/ dist-package/
-          cp index.js dist-package/
-          cp index.d.ts dist-package/
-          cp README.md dist-package/
-          cp LICENSE dist-package/
-          cp docs/CHANGELOG.md dist-package/ 2>/dev/null || echo "# Changelog" > dist-package/CHANGELOG.md
-
-          # Copy package.json and modify for npm
-          cp package.json dist-package/
-          cd dist-package
-
-          # Update package.json for npm publication
-          node -e "
-            const pkg = JSON.parse(require('fs').readFileSync('package.json', 'utf8'));
-            pkg.main = './index.js';
-            pkg.types = './index.d.ts';
-            pkg.files = ['*.js', '*.d.ts', 'native/'];
-            delete pkg.scripts;
-            delete pkg.devDependencies;
-            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2));
-          "
-
-          # List final package contents
-          echo "Final package contents:"
-          ls -la
-
-      - name: Validate package
-        run: |
-          cd dist-package
-          # Check if required files exist
-          if [ ! -f "package.json" ]; then
-            echo "Error: package.json not found"
-            exit 1
-          fi
-          if [ ! -f "index.js" ]; then
-            echo "Error: index.js not found"
-            exit 1
-          fi
-          if [ ! -f "index.d.ts" ]; then
-            echo "Error: index.d.ts not found"
-            exit 1
-          fi
-          if [ ! -d "native" ]; then
-            echo "Error: native directory not found"
-            exit 1
-          fi
-          if [ -z "$(ls -A native/)" ]; then
-            echo "Error: native directory is empty"
-            exit 1
-          fi
-          echo "Package validation passed"
-
-      - name: Create release archive
-        run: |
-          cd dist-package
-          tar -czf ../miniaudio-node-${{ github.event.release.tag_name }}.tar.gz .
-          cd ..
-
-      - name: Upload release asset
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          files: ./miniaudio-node-${{ github.event.release.tag_name }}.tar.gz
+          files: |
+            release/*.node
+            release/package.json
+            release/index.js
+            release/index.d.ts
+          draft: false
+          prerelease: false
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Publish to npm
-        run: |
-          cd dist-package
-          npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
