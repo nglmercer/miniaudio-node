@@ -427,9 +427,9 @@ mod tests {
         let result = initialize_audio();
 
         // Check if we're in a CI environment
-        let is_ci = std::env::var("CI").is_ok() ||
-                   std::env::var("GITHUB_ACTIONS").is_ok() ||
-                   std::env::var("CONTINUOUS_INTEGRATION").is_ok();
+        let is_ci = std::env::var("CI").is_ok()
+            || std::env::var("GITHUB_ACTIONS").is_ok()
+            || std::env::var("CONTINUOUS_INTEGRATION").is_ok();
 
         if is_ci {
             // CI environments often don't have audio hardware available
