@@ -18,6 +18,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Ensure LF line endings for consistency
+          line-ending: lf
 
       - name: Install system dependencies
         run: |
@@ -177,6 +180,18 @@ jobs:
 
       - name: Install dependencies
         run: bun install
+
+      - name: Setup NAPI environment
+        run: |
+          # Ensure proper NAPI linking for Linux
+          export NAPI_RS_LINK_TYPE=dynamic
+          # Set up cross-compilation for ARM64 if needed
+          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+            export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+            export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
+            export PKG_CONFIG_ALLOW_CROSS=1
+            export ALSA_NO_PKG_CONFIG=1
+          fi
 
       - name: Build native binary
         run: bunx napi build --target ${{ matrix.target }} --release

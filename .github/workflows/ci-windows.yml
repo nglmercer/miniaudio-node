@@ -18,6 +18,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Ensure LF line endings for consistency
+          line-ending: lf
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -41,8 +44,12 @@ jobs:
           restore-keys: |
             windows-latest-cargo-
 
-      - name: Check Rust formatting
+      - name: Normalize line endings and check Rust formatting
         run: |
+          # Ensure LF line endings before checking formatting
+          git config core.autocrlf false
+          git config core.eol lf
+          git add . && git reset --hard HEAD
           cargo fmt --all -- --check
 
       - name: Rust linting

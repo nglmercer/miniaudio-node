@@ -1,151 +1,194 @@
-# GitHub Actions Workflows
+# Convert existing files to LF
+dos2unix src/lib.rs
+git config core.autocrlf false
+git config core.eol lf
+```
 
-This directory contains the modularized CI/CD workflows for the miniaudio-node project.
+### 2. macOS/Linux - NAPI Linking Issues
 
-## Workflow Structure
+**Problem**: `symbol(s) not found for architecture arm64` errors during linking
 
-### Main Workflows
+**Solution Implemented**:
+- Added `NAPI_RS_LINK_TYPE=dynamic` environment variable
+- Improved cross-compilation setup for ARM64 targets
+- Updated NAPI configuration in `Cargo.toml` with async features
+- Added proper SDK paths for macOS cross-compilation
 
-#### `ci.yml` - Main CI/CD Pipeline
-**Triggers**: Push/PR to `main` or `develop` branches
+**Environment Variables**:
+```bash
+export NAPI_RS_LINK_TYPE=dynamic
+# For macOS ARM64 cross-compilation
+export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
+export MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)
+# For Linux ARM64 cross-compilation
+export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
+```
 
-**Jobs**:
-- `trigger-platform-cis`: Orchestrates platform-specific CI workflows
-- `security`: Runs security audits (npm and cargo)
-- `docs`: Deploys documentation (main branch only)
-- `ci-summary`: Provides summary of all CI results
+### 3. Dependency Configuration
 
-#### `release.yml` - Release and Publish
-**Triggers**: Release publication
+**Problem**: Rodio feature configuration errors
 
-**Jobs**:
-- `wait-for-builds`: Ensures platform builds complete
-- `release`: Creates release assets and publishes to npm
+**Solution Implemented**:
+- Fixed rodio features from `ogg` to `vorbis`
+- Added `async` feature to NAPI for better performance
+- Optimized release profile settings
 
-### Platform-Specific Workflows
+## Workflow Files
 
-#### `ci-linux.yml` - Linux CI
-**Triggers**: Push/PR to `main` or `develop` branches
+- `ci-windows.yml` - Windows-specific CI pipeline
+- `ci-macos.yml` - macOS-specific CI pipeline  
+- `ci-linux.yml` - Linux-specific CI pipeline
+- `ci.yml` - Main CI coordination workflow
+- `release.yml` - Release automation workflow
+- `reusable-templates.yml` - Reusable workflow components
 
-**Jobs**:
-- `rust-tests-linux`: Rust formatting, linting, and tests on Ubuntu
-- `node-tests-linux`: Node.js/Bun tests on Ubuntu (Node 18 & 20)
-- `build-linux`: Cross-compiles Linux binaries (x64-gnu, x64-musl, arm64-gnu)
+## Testing Locally
 
-#### `ci-macos.yml` - macOS CI
-**Triggers**: Push/PR to `main` or `develop` branches
+### Prerequisites
+```bash
+# Install dependencies
+bun install
 
-**Jobs**:
-- `rust-tests-macos`: Rust formatting, linting, and tests on macOS
-- `node-tests-macos`: Node.js/Bun tests on macOS (Node 18 & 20)
-- `build-macos`: Cross-compiles macOS binaries (x64, arm64)
+# Setup git hooks
+./setup-hooks.sh
+```
 
-#### `ci-windows.yml` - Windows CI
-**Triggers**: Push/PR to `main` or `develop` branches
+### Build Commands
+```bash
+# Debug build
+bunx napi build --platform
 
-**Jobs**:
-- `rust-tests-windows`: Rust formatting, linting, and tests on Windows
-- `node-tests-windows`: Node.js/Bun tests on Windows (Node 18 & 20)
-- `build-windows`: Cross-compiles Windows binaries (x64-msvc, ia32-msvc, arm64-msvc)
+# Release build
+bunx napi build --platform --release
 
-### Reusable Components
+# Cross-platform build
+bunx napi build --target x86_64-apple-darwin --release
+bunx napi build --target aarch64-apple-darwin --release
+```
 
-#### `reusable-templates.yml` - Shared Templates
-**Purpose**: Provides reusable workflow components for common setup tasks
+### Quality Checks
+```bash
+# Format code
+cargo fmt --all
 
-**Jobs**:
-- `setup-rust`: Configures Rust environment with system dependencies
-- `setup-node`: Configures Node.js/Bun environment
+# Check formatting
+cargo fmt --all -- --check
 
-## Key Improvements
+# Run clippy
+cargo clippy --all-targets --all-features -- -D warnings
 
-### 1. Modular Architecture
-- Separate workflows for each platform
-- Clear separation of concerns
-- Independent execution and failure isolation
+# Run tests
+cargo test --verbose
+bun test
+```
 
-### 2. ALSA Dependency Fix
-- Linux workflows install `libasound2-dev` and `libpkgconf-dev`
-- Resolves build failures on Ubuntu runners
-- Only affects Linux builds
+## Common Debugging Steps
 
-### 3. Improved Release Process
-- Better artifact management and validation
-- Comprehensive package validation
-- Release asset creation
-- Robust npm publishing
+### 1. Clean Build Environment
+```bash
+# Clean all build artifacts
+cargo clean
+napi clean
+rm -rf target/
+rm -rf node_modules/
+bun install
+```
 
-### 4. Enhanced Error Handling
-- Continue-on-error for artifact downloads
-- Validation steps for release packages
-- Clear error messages and debugging info
+### 2. Check Dependencies
+```bash
+# Check Cargo.lock consistency
+cargo check
 
-### 5. Optimized Caching
-- Platform-specific cache keys
-- Separate caches for Rust and Node dependencies
-- Better cache hit rates
+# Update dependencies if needed
+cargo update
+```
 
-## Binary Targets
+### 3. Verify Cross-Compilation Setup
+```bash
+# List installed Rust targets
+rustup target list --installed
 
-### Linux
-- `x86_64-unknown-linux-gnu` → `miniaudio_node.linux-x64-gnu.node`
-- `x86_64-unknown-linux-musl` → `miniaudio_node.linux-x64-musl.node`
-- `aarch64-unknown-linux-gnu` → `miniaudio_node.linux-arm64-gnu.node`
+# Add missing targets
+rustup target add x86_64-apple-darwin
+rustup target add aarch64-apple-darwin
+rustup target add x86_64-pc-windows-msvc
+rustup target add aarch64-pc-windows-msvc
+rustup target add x86_64-unknown-linux-gnu
+rustup target add aarch64-unknown-linux-gnu
+```
 
-### macOS
-- `x86_64-apple-darwin` → `miniaudio_node.darwin-x64.node`
-- `aarch64-apple-darwin` → `miniaudio_node.darwin-arm64.node`
+### 4. Check NAPI Configuration
+```bash
+# Verify NAPI configuration
+cat .napirc.json
+cat package.json | jq '.napi'
+```
 
-### Windows
-- `x86_64-pc-windows-msvc` → `miniaudio_node.win32-x64-msvc.node`
-- `i686-pc-windows-msvc` → `miniaudio_node.win32-ia32-msvc.node`
-- `aarch64-pc-windows-msvc` → `miniaudio_node.win32-arm64-msvc.node`
+## Performance Optimizations
+
+### Release Profile Optimizations
+```toml
+[profile.release]
+lto = true              # Link-time optimization
+codegen-units = 1       # Better optimization
+panic = "abort"         # Smaller binary
+strip = true           # Remove debug symbols
+opt-level = "z"         # Size optimization
+```
+
+### NAPI-specific Optimizations
+```toml
+[profile.release.package.napi]
+codegen-units = 1       # Optimize NAPI for better linking
+```
 
 ## Environment Variables
 
-### Global
-- `RUST_TOOLCHAIN`: Stable Rust toolchain
-- `NODE_VERSION`: Node.js version 20
+### CI Environment
+- `RUST_TOOLCHAIN: stable`
+- `NODE_VERSION: "20"`
+- `NAPI_RS_LINK_TYPE: dynamic`
 
-### Secrets Required
-- `NPM_TOKEN`: For npm package publishing
-- `GITHUB_TOKEN`: For release asset uploads (automatic)
+### Cross-Compilation
+- `SDKROOT` (macOS)
+- `MACOSX_DEPLOYMENT_TARGET` (macOS)
+- `CC_*` and `CXX_*` (Linux cross-compilation)
+- `PKG_CONFIG_ALLOW_CROSS=1`
+- `ALSA_NO_PKG_CONFIG=1` (Linux audio)
 
-## Troubleshooting
+## Monitoring and Alerting
 
-### ALSA Issues (Linux)
-If you encounter ALSA-related build errors:
-```bash
-sudo apt-get update
-sudo apt-get install -y libasound2-dev libpkgconf-dev
-```
+The workflows include:
+- Artifact uploads for all successful builds
+- Comprehensive error logging
+- Cross-platform testing matrix
+- Dependency caching for faster builds
 
-### Build Failures
-1. Check platform-specific workflow logs
-2. Verify system dependencies are installed
-3. Check cache key generation
-4. Validate target architecture support
+## Future Improvements
 
-### Release Issues
-1. Ensure all platform builds passed
-2. Check artifact download logs
-3. Validate package.json modifications
-4. Verify npm authentication
+1. **ARM64 Support**: Re-enable ARM64 builds once linking issues are fully resolved
+2. **Automated Testing**: Add integration tests with actual audio files
+3. **Performance Benchmarks**: Add performance regression testing
+4. **Security Scanning**: Add dependency vulnerability scanning
+5. **Documentation Generation**: Auto-generate API documentation from code
 
-## Migration Notes
+## Troubleshooting Checklist
 
-This modular structure replaces the original monolithic `ci.yml` workflow. Key changes:
+Before opening an issue:
 
-1. **Platform Separation**: Each platform has its own workflow
-2. **Release Independence**: Release is now a separate workflow
-3. **Better Debugging**: Isolated failures are easier to diagnose
-4. **Parallel Execution**: Platforms can run in parallel
-5. **Maintenance**: Easier to update individual components
+- [ ] Clean build environment (`cargo clean`, `napi clean`)
+- [ ] Update dependencies (`cargo update`, `bun install`)
+- [ ] Check formatting (`cargo fmt --all -- --check`)
+- [ ] Run clippy (`cargo clippy -- -D warnings`)
+- [ ] Verify line endings (should be LF)
+- [ ] Check git hooks are installed (`./setup-hooks.sh`)
+- [ ] Test locally with same Node.js/Rust versions as CI
 
-## Future Enhancements
+## Getting Help
 
-- [ ] Add actual reusable workflow calls (GitHub Actions limitation)
-- [ ] Integration tests across platforms
-- [ ] Automated binary size reporting
-- [ ] Performance benchmarking
-- [ ] Multi-architecture testing
+For additional support:
+1. Check GitHub Issues for existing solutions
+2. Review workflow logs for specific error details
+3. Test with minimal reproduction case
+4. Include environment details (OS, Rust version, Node.js version)

@@ -30,9 +30,9 @@ targets = [
 # [package.metadata.napi.custom-targets...] (mantén las existentes)
 
 [dependencies]
-napi = { version = "2.16", features = ["napi4", "serde-json"] }
+napi = { version = "2.16", features = ["napi4", "serde-json", "async"] }
 napi-derive = "2.16"
-rodio = "0.19.0"
+rodio = { version = "0.19.0", features = ["wav", "mp3", "flac", "vorbis"] }
 
 [features]
 default = []
@@ -43,6 +43,10 @@ codegen-units = 1
 panic = "abort"
 strip = true
 opt-level = "z"
+
+[profile.release.package.napi]
+# Optimize NAPI for better linking
+codegen-units = 1
 
 [profile.dev]
 opt-level = 0
