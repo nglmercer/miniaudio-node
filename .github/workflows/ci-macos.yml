@@ -144,7 +144,14 @@ jobs:
         run: bun install
 
       - name: Build native binary
-        run: bunx napi build --target ${{ matrix.target }} --release
+        run: |
+          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            # Build for ARM64 with proper NAPI linking
+            bunx napi build --target ${{ matrix.target }} --release --cargo-flags="-C link-arg=-undefined -C link-arg=dynamic_lookup"
+          else
+            # Normal build for x86_64 (default includes audio)
+            bunx napi build --target ${{ matrix.target }} --release
+          fi
 
       - name: Prepare artifact
         run: |

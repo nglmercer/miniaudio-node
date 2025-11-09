@@ -158,23 +158,17 @@ jobs:
         run: |
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
           if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
-            # Add ARM64 architecture
-            sudo dpkg --add-architecture arm64
-            sudo apt-get update
-            sudo apt-get install -y libasound2-dev:arm64 pkg-config:arm64 gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-            # Set up cross-compilation environment variables
-            echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-            echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
-            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-            # Create sysroot for cross-compilation
-            sudo mkdir -p /usr/aarch64-linux-gnu/sysroot
-            sudo cp -r /usr/include/aarch64-linux-gnu /usr/aarch64-linux-gnu/sysroot/ 2>/dev/null || true
-            sudo cp -r /usr/lib/aarch64-linux-gnu /usr/aarch64-linux-gnu/sysroot/ 2>/dev/null || true
-            # Set pkg-config paths for cross-compilation
-            echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/aarch64-linux-gnu/sysroot/lib/pkgconfig" >> $GITHUB_ENV
-            echo "PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
-            # Set sysroot for pkg-config
-            echo "PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu/sysroot" >> $GITHUB_ENV
+            # Use Zig for cross-compilation to avoid ARM64 repository issues
+            curl -L https://ziglang.org/download/0.11.0/zig-linux-x86_64-0.11.0.tar.xz | tar -xJ
+            sudo mv zig-linux-x86_64-0.11.0/zig /usr/local/bin/
+            sudo chmod +x /usr/local/bin/zig
+            # Set up cross-compilation environment variables for Zig
+            echo "CC=zig cc -target aarch64-unknown-linux-gnu" >> $GITHUB_ENV
+            echo "CXX=zig c++ -target aarch64-unknown-linux-gnu" >> $GITHUB_ENV
+            # Disable ALSA pkg-config for cross-compilation to avoid issues
+            echo "ALSA_NO_PKG_CONFIG=1" >> $GITHUB_ENV
+            # Set Rust flags for cross-compilation
+            echo "RUSTFLAGS='-C target=aarch64-unknown-linux-gnu'" >> $GITHUB_ENV
           fi
 
       - name: Setup Bun
@@ -187,7 +181,13 @@ jobs:
 
       - name: Build native binary
         run: |
-          bunx napi build --target ${{ matrix.target }} --release
+          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+            # Build with Zig cross-compiler for ARM64, without audio to avoid ALSA issues
+            bunx napi build --target ${{ matrix.target }} --release --cargo-flags="--no-default-features --features=napi4,serde-json"
+          else
+            # Normal build for x86_64 (default includes audio)
+            bunx napi build --target ${{ matrix.target }} --release
+          fi
 
       - name: Prepare artifact
         run: |
