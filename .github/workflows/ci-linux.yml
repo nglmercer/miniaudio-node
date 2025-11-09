@@ -38,7 +38,6 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
-          targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -102,12 +101,6 @@ jobs:
 
       - name: Install dependencies
         run: bun install
-
-      - name: Setup NAPI environment
-        run: |
-          # Set NAPI environment for consistent builds
-          export NAPI_RS_LINK_TYPE=dynamic
-          export PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig
 
       - name: Build native module
         run: bunx napi build --platform
@@ -199,8 +192,6 @@ jobs:
             export PKG_CONFIG_ALLOW_CROSS=1
             export ALSA_NO_PKG_CONFIG=1
           fi
-          # Common Linux environment setup
-          export PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig
 
       - name: Build native binary
         run: bunx napi build --target ${{ matrix.target }} --release

@@ -29,7 +29,6 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
-          targets: x86_64-apple-darwin,aarch64-apple-darwin
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -90,12 +89,7 @@ jobs:
         run: bun install
 
       - name: Build native module
-        run: |
-          # Setup NAPI environment
-          export NAPI_RS_LINK_TYPE=dynamic
-          export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
-          export MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)
-          bunx napi build --platform --release --target x86_64-apple-darwin
+        run: bunx napi build --platform --release --target x86_64-apple-darwin
 
       - name: Check native module
         run: ls -la *.node || echo "No .node files found"
@@ -159,8 +153,10 @@ jobs:
           # Ensure proper NAPI linking for macOS
           export NAPI_RS_LINK_TYPE=dynamic
           # Set SDK paths for cross-compilation
-          export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
-          export MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)
+          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
+            export MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)
+          fi
 
       - name: Build native binary
         run: bunx napi build --target ${{ matrix.target }} --release
