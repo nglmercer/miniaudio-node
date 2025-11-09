@@ -34,19 +34,8 @@ napi = { version = "2.16", features = ["napi4", "serde-json"] }
 napi-derive = "2.16"
 rodio = "0.19.0"
 
-# Error handling
-anyhow = "1.0"
-thiserror = "1.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
-# Async support (opcional)
-tokio = { version = "1.0", features = ["rt-multi-thread", "sync"], optional = true }
-
 [features]
-default = ["audio"]
-async = ["tokio"]
-audio = []  # miniaudio no necesita habilitar features adicionales
+default = []
 
 [profile.release]
 lto = true

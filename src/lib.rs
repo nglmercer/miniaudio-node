@@ -3,13 +3,14 @@
 
 use napi::{Error, Result, Status};
 use napi_derive::napi;
-use std::path::Path;
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
 use std::fs::File;
 use std::io::BufReader;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::rc::Rc;
+use std::thread;
+use std::time::Duration;
 // Usaremos OutputStream en cada instancia de AudioPlayer
 
 /// Audio device information structure
@@ -38,8 +39,8 @@ pub struct AudioPlayer {
     state: Arc<Mutex<PlaybackState>>,
     duration: Arc<Mutex<f64>>,
     sink: Arc<Mutex<Option<Sink>>>,
-    output_stream: Arc<Mutex<Option<OutputStream>>>,
-    stream_handle: Arc<Mutex<Option<OutputStreamHandle>>>,
+    output_stream: Rc<Mutex<Option<OutputStream>>>,
+    stream_handle: Rc<Mutex<Option<OutputStreamHandle>>>,
 }
 
 impl Default for AudioPlayer {
@@ -50,8 +51,8 @@ impl Default for AudioPlayer {
             state: Arc::new(Mutex::new(PlaybackState::Stopped)),
             duration: Arc::new(Mutex::new(0.0)),
             sink: Arc::new(Mutex::new(None)),
-            output_stream: Arc::new(Mutex::new(None)),
-            stream_handle: Arc::new(Mutex::new(None)),
+            output_stream: Rc::new(Mutex::new(None)),
+            stream_handle: Rc::new(Mutex::new(None)),
         }
     }
 }
@@ -94,12 +95,14 @@ impl AudioPlayer {
         self.stop().ok();
 
         // Estimate duration by opening the file and getting its properties
-        let file = File::open(path).map_err(|e| {
-            Error::new(Status::InvalidArg, format!("Failed to open file: {}", e))
-        })?;
+        let file = File::open(path)
+            .map_err(|e| Error::new(Status::InvalidArg, format!("Failed to open file: {}", e)))?;
         let reader = BufReader::new(file);
         let _decoder = Decoder::new(reader).map_err(|e| {
-            Error::new(Status::InvalidArg, format!("Failed to create decoder: {}", e))
+            Error::new(
+                Status::InvalidArg,
+                format!("Failed to create decoder: {}", e),
+            )
         })?;
 
         // Rodio doesn't provide direct duration info, so we'll estimate 0 for now
@@ -128,7 +131,10 @@ impl AudioPlayer {
                             *output_stream_guard = Some(stream);
                         }
                         Err(e) => {
-                            return Err(Error::new(Status::GenericFailure, format!("Failed to create output stream: {}", e)));
+                            return Err(Error::new(
+                                Status::GenericFailure,
+                                format!("Failed to create output stream: {}", e),
+                            ));
                         }
                     }
                 }
@@ -136,14 +142,16 @@ impl AudioPlayer {
                 let stream_handle = stream_handle_guard.as_ref().unwrap();
                 match Sink::try_new(stream_handle) {
                     Ok(sink) => {
-
                         // Load and play the file
                         let file = File::open(path).map_err(|e| {
                             Error::new(Status::InvalidArg, format!("Failed to open file: {}", e))
                         })?;
                         let reader = BufReader::new(file);
                         let source = Decoder::new(reader).map_err(|e| {
-                            Error::new(Status::InvalidArg, format!("Failed to create decoder: {}", e))
+                            Error::new(
+                                Status::InvalidArg,
+                                format!("Failed to create decoder: {}", e),
+                            )
                         })?;
 
                         sink.append(source);
@@ -153,10 +161,12 @@ impl AudioPlayer {
                         *self.state.lock().unwrap() = PlaybackState::Playing;
                     }
                     Err(e) => {
-                        return Err(Error::new(Status::GenericFailure, format!("Failed to create sink: {}", e)));
+                        return Err(Error::new(
+                            Status::GenericFailure,
+                            format!("Failed to create sink: {}", e),
+                        ));
                     }
                 }
-
             } else {
                 return Err(Error::new(Status::InvalidArg, "Player not initialized"));
             }
@@ -264,7 +274,10 @@ pub fn initialize_audio() -> Result<String> {
     // Try to create an output stream to test audio system
     match OutputStream::try_default() {
         Ok((_stream, _handle)) => Ok("Audio system initialized with rodio".to_string()),
-        Err(e) => Err(Error::new(Status::GenericFailure, format!("Failed to initialize audio: {}", e))),
+        Err(e) => Err(Error::new(
+            Status::GenericFailure,
+            format!("Failed to initialize audio: {}", e),
+        )),
     }
 }
 
@@ -296,11 +309,17 @@ pub fn test_tone(frequency: f64, duration_ms: u32) -> Result<()> {
     use rodio::source::{SineWave, Source};
 
     let (_stream, handle) = OutputStream::try_default().map_err(|e| {
-        Error::new(Status::GenericFailure, format!("Failed to create output stream: {}", e))
+        Error::new(
+            Status::GenericFailure,
+            format!("Failed to create output stream: {}", e),
+        )
     })?;
 
     let sink = Sink::try_new(&handle).map_err(|e| {
-        Error::new(Status::GenericFailure, format!("Failed to create sink: {}", e))
+        Error::new(
+            Status::GenericFailure,
+            format!("Failed to create sink: {}", e),
+        )
     })?;
 
     let source = SineWave::new(frequency as f32)
