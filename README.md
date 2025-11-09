@@ -2,10 +2,9 @@
 
 [![npm version](https://badge.fury.io/js/miniaudio_node.svg)](https://badge.fury.io/js/miniaudio_node)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/audio-dev/miniaudio_node)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/nglmercer/miniaudio-node)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
 [![Bun](https://img.shields.io/badge/bun-1.0+-ff69b4.svg)](https://bun.sh)
-[![Tests](https://img.shields.io/badge/tests-38%20passing-brightgreen.svg)](https://github.com/audio-dev/miniaudio_node)
 
 > High-performance native audio playback for Bun/Node.js. Built with Rust and the powerful rodio audio engine.
 
@@ -86,9 +85,9 @@ import { createAudioPlayer, quickPlay, getAudioMetadata } from 'miniaudio_node'
 const player = createAudioPlayer({ volume: 0.8, autoPlay: false })
 
 // Quick play with options
-const player2 = quickPlay('path/to/audio.mp3', { 
-  volume: 0.7, 
-  autoPlay: true 
+const player2 = quickPlay('path/to/audio.mp3', {
+  volume: 0.7,
+  autoPlay: true
 })
 
 // Get audio metadata
@@ -465,7 +464,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - 📧 **Issues**: [GitHub Issues](https://github.com/nglmercer/miniaudio-node/issues)
 - 💬 **Discussions**: [GitHub Discussions](https://github.com/nglmercer/miniaudio-node/discussions)
-- 📖 **Documentation**: [Full Docs](https://miniaudio_node.js.org)
+- 📦 **NPM Package**: [miniaudio_node](https://www.npmjs.com/package/miniaudio_node)
 - 🐛 **Bug Reports**: Please use the issue template with reproduction steps
 
 ## 🌟 Star History
@@ -475,8 +474,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 <div align="center">
-  <p>Made with ❤️ by the audio development community</p>
-  <p>
     <a href="#top">⬆️ Back to top</a>
-  </p>
 </div>

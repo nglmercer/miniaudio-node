@@ -1,6 +1,31 @@
 {
   "name": "miniaudio_node",
   "version": "1.0.0",
+  "description": "High-performance native audio playback for Node.js and Bun. Built with Rust and the powerful rodio audio engine.",
+  "keywords": [
+    "audio",
+    "sound",
+    "music",
+    "playback",
+    "rust",
+    "native",
+    "miniaudio",
+    "rodio",
+    "nodejs",
+    "bun",
+    "wav",
+    "mp3",
+    "flac",
+    "ogg"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nglmercer/miniaudio-node.git"
+  },
+  "homepage": "https://github.com/nglmercer/miniaudio-node#readme",
+  "bugs": {
+    "url": "https://github.com/nglmercer/miniaudio-node/issues"
+  },
   "scripts": {
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
@@ -13,7 +38,8 @@
   "files": [
     "index.js",
     "index.d.ts",
-    "*.node"
+    "*.node",
+    "README.md"
   ],
   "devDependencies": {
     "@napi-rs/cli": "^2.18.0"
@@ -34,5 +60,10 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "nglmercer",
+    "email": "nglmercer@gmail.com"
   }
 }
