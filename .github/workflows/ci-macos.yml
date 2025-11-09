@@ -9,23 +9,21 @@ on:
 env:
   RUST_TOOLCHAIN: stable
   NODE_VERSION: "20"
-  MACOSX_DEPLOYMENT_TARGET: "10.15" # Añadido para consistencia
+  MACOSX_DEPLOYMENT_TARGET: "10.15"
 
 jobs:
   rust-tests-macos:
     name: Rust Tests (macOS)
     runs-on: macos-latest
-    timeout-minutes: 30 # Prevenir timeouts silenciosos
+    timeout-minutes: 30
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install macOS development tools
+      - name: Install Xcode Command Line Tools
         run: |
-          # Asegurar que Xcode Command Line Tools están instaladas
-          xcode-select --install || true
-          # Verificar instalación
+          xcode-select --install 2>/dev/null || true
           xcode-select -p
 
       - name: Setup Node.js
@@ -47,9 +45,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target/
-          key: macos-latest-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: macos-rust-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            macos-latest-cargo-
+            macos-rust-
 
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
@@ -61,9 +59,9 @@ jobs:
         run: cargo test --verbose
 
   node-tests-macos:
-    name: Node.js Tests (macOS)
+    name: Node.js Tests (macOS) - Node ${{ matrix.node-version }}
     runs-on: macos-latest
-    timeout-minutes: 45 # NAPI build puede tardar
+    timeout-minutes: 45
     strategy:
       matrix:
         node-version: [18, 20]
@@ -88,61 +86,55 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: x86_64-apple-darwin
 
-      - name: Setup NAPI environment
+      - name: Setup critical environment variables
         run: |
-          # CRUCIAL: Establecer linking dinámico para macOS
           echo "NAPI_RS_LINK_TYPE=dynamic" >> $GITHUB_ENV
           echo "MACOSX_DEPLOYMENT_TARGET=${{ env.MACOSX_DEPLOYMENT_TARGET }}" >> $GITHUB_ENV
-          # Verificar entorno
-          echo "Rust version:" $(rustc --version)
-          echo "Cargo version:" $(cargo --version)
 
       - name: Cache dependencies
         uses: actions/cache@v4
         with:
           path: |
-            node_modules
             ~/.bun/install/cache
             ~/.cargo/registry
             ~/.cargo/git
-          key: macos-${{ matrix.node-version }}-deps-${{ hashFiles('**/package.json', '**/bun.lock', '**/Cargo.lock') }}
+          key: macos-${{ matrix.node-version }}-${{ hashFiles('**/bun.lockb', '**/Cargo.lock') }}
           restore-keys: |
-            macos-${{ matrix.node-version }}-deps-
+            macos-${{ matrix.node-version }}-
 
       - name: Install dependencies
-        run: bun install
+        run: |
+          bun install --frozen-lockfile
+          # Verificar que napi-cli está disponible
+          ls -la node_modules/.bin/napi || echo "NAPI bin not found"
 
       - name: Build native module
-        run: |
-          # Verificar que napi está disponible
-          bunx --yes @napi-rs/cli --version
-          # Compilar con verbose para ver errores detallados
-          bunx napi build --platform --release --verbose
+        run: bun run build
+        env:
+          FORCE_COLOR: 1
 
-      - name: Check native module
+      - name: Debug built files
         run: |
-          echo "Buscando archivos .node:"
-          find . -name "*.node" -type f || echo "No .node files found"
+          echo "=== Files in root ==="
           ls -la *.node 2>/dev/null || true
+          echo "=== Files in target/ ==="
+          find target -name "*.node" -type f 2>/dev/null || true
 
       - name: Run tests
         run: bun test
 
   build-macos:
-    name: Build macOS Binaries
+    name: Build macOS Binaries (${{ matrix.target }})
     needs: [rust-tests-macos, node-tests-macos]
     runs-on: macos-latest
-    timeout-minutes: 60 # Cross-compilación necesita más tiempo
+    timeout-minutes: 60
     strategy:
       matrix:
         include:
           - target: x86_64-apple-darwin
             artifact_name: miniaudio_node.darwin-x64.node
-            sdk: macosx
-          # Habilitar ARM64 con fixes
           - target: aarch64-apple-darwin
             artifact_name: miniaudio_node.darwin-arm64.node
-            sdk: macosx
 
     steps:
       - name: Checkout code
@@ -153,71 +145,66 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
 
-      - name: Install macOS dependencies
+      - name: Install system dependencies
         run: |
-          # Instalar LLVM para herramientas de cross-compilación
-          brew install llvm
-          # Asegurar que pkg-config está disponible
-          brew install pkg-config
+          brew install llvm pkg-config
+          echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
 
-      - name: Setup SDK and environment
+      - name: Setup cross-compilation environment
         run: |
-          # Establecer SDK de macOS
-          SDK_PATH=$(xcrun --sdk ${{ matrix.sdk }} --show-sdk-path)
-          echo "SDKROOT=$SDK_PATH" >> $GITHUB_ENV
+          SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
+          echo "SDKROOT=$SDKROOT" >> $GITHUB_ENV
           echo "MACOSX_DEPLOYMENT_TARGET=${{ env.MACOSX_DEPLOYMENT_TARGET }}" >> $GITHUB_ENV
           echo "NAPI_RS_LINK_TYPE=dynamic" >> $GITHUB_ENV
 
-          # Configurar LLVM para cross-compilación
-          LLVM_PATH=$(brew --prefix llvm)
-          echo "$LLVM_PATH/bin" >> $GITHUB_PATH
-          echo "CC_${{ matrix.target }}=$LLVM_PATH/bin/clang" >> $GITHUB_ENV
-          echo "CXX_${{ matrix.target }}=$LLVM_PATH/bin/clang++" >> $GITHUB_ENV
+          # Configurar compilador para cross-compilation
+          LLVM_PREFIX=$(brew --prefix llvm)
+          echo "CC_${{ matrix.target }}=$LLVM_PREFIX/bin/clang" >> $GITHUB_ENV
+          echo "CXX_${{ matrix.target }}=$LLVM_PREFIX/bin/clang++" >> $GITHUB_ENV
 
-          # Variables específicas para ARM64
-          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
-            echo "CFLAGS_aarch64_apple_darwin=-arch arm64" >> $GITHUB_ENV
-            echo "CXXFLAGS_aarch64_apple_darwin=-arch arm64" >> $GITHUB_ENV
-          fi
-
-      - name: Cache Rust dependencies
+      - name: Cache dependencies
         uses: actions/cache@v4
         with:
           path: |
+            ~/.bun/install/cache
             ~/.cargo/registry
             ~/.cargo/git
             target/
-          key: macos-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: macos-build-${{ matrix.target }}-${{ hashFiles('**/bun.lockb', '**/Cargo.lock') }}
           restore-keys: |
-            macos-${{ matrix.target }}-cargo-
+            macos-build-${{ matrix.target }}-
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Build native binary
-        run: |
-          bunx --yes @napi-rs/cli --version
-          bunx napi build --target ${{ matrix.target }} --release --verbose
+        run: bunx napi build --target ${{ matrix.target }} --release --verbose
+        env:
+          FORCE_COLOR: 1
 
       - name: Verify and prepare artifact
         run: |
           mkdir -p dist
-          # Buscar el archivo .node con nombre específico o genérico
           NODE_FILE=$(find . -name "*.node" -type f | head -n 1)
           if [ -n "$NODE_FILE" ]; then
-            echo "Found native module: $NODE_FILE"
+            echo "✅ Found native module: $NODE_FILE"
             cp "$NODE_FILE" "dist/${{ matrix.artifact_name }}"
             file "dist/${{ matrix.artifact_name }}"
           else
-            echo "ERROR: No .node file found after build"
-            echo "Files in current directory:"
-            ls -la
+            echo "❌ ERROR: No .node file found after build"
+            echo "Content of target/release:"
+            ls -la target/release/ 2>/dev/null || true
             exit 1
           fi
 
