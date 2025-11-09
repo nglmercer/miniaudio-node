@@ -4,6 +4,9 @@ on:
   push:
     tags: ["v*"]
 
+env:
+  NAPI_RS_LINK_TYPE: dynamic
+
 jobs:
   build:
     name: Build ${{ matrix.target }}
@@ -41,14 +44,61 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
 
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ matrix.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.os }}-${{ matrix.target }}-cargo-
+
+      - name: Install system dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libpkgconf-dev gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          # Set environment variables to avoid ALSA cross-compilation issues
+          echo "ALSA_NO_PKG_CONFIG=1" >> $GITHUB_ENV
+
+      - name: Setup macOS SDK environment
+        if: matrix.os == 'macos-latest'
+        run: |
+          SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
+          echo "SDKROOT=$SDKROOT" >> $GITHUB_ENV
+          echo "MACOSX_DEPLOYMENT_TARGET=10.15" >> $GITHUB_ENV
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            .bun-cache
+            ~/.npm
+          key: ${{ matrix.os }}-${{ matrix.target }}-deps-${{ hashFiles('package.json', 'bun.lock') }}
+          restore-keys: |
+            ${{ matrix.os }}-${{ matrix.target }}-deps-
+
       - name: Install dependencies
         run: bun install --frozen-lockfile
+        # NAPI_RS_LINK_TYPE is set globally above
 
       - name: Setup Zig (Linux ARM64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: "0.11.0"
+        run: |
+          curl -L https://ziglang.org/download/0.11.0/zig-linux-x86_64-0.11.0.tar.xz | tar -xJ
+          sudo mv zig-linux-x86_64-0.11.0/zig /usr/local/bin/
+          sudo chmod +x /usr/local/bin/zig
+
+      - name: Setup cross-compilation environment (ARM64 Linux)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+          # ALSA_NO_PKG_CONFIG already set above for all Linux builds
 
       - name: Build native module
         run: |
