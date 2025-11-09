@@ -18,9 +18,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          # Ensure LF line endings for consistency
-          line-ending: lf
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -44,21 +41,37 @@ jobs:
           restore-keys: |
             windows-latest-cargo-
 
-      - name: Normalize line endings and check Rust formatting
+      - name: Configure Git for Windows
         run: |
-          # Ensure LF line endings before checking formatting
-          git config core.autocrlf false
-          git config core.eol lf
-          git add . && git reset --hard HEAD
-          cargo fmt --all -- --check
+          git config --global core.autocrlf input
+          git config --global core.eol lf
+        shell: powershell
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
 
       - name: Rust linting
         run: |
           cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Run Rust tests
+      - name: Run Rust tests with detailed output
         run: |
-          cargo test --verbose
+          cargo test --verbose -- --nocapture
+        shell: powershell
+
+      - name: Debug test failure info
+        if: failure()
+        run: |
+          Write-Output "=== Rust Test Debug Information ==="
+          Write-Output "Rust version: $(rustc --version)"
+          Write-Output "Cargo version: $(cargo --version)"
+          Write-Output "Architecture: $env:PROCESSOR_ARCHITECTURE"
+          Write-Output "PowerShell version: $($PSVersionTable.PSVersion)"
+          Write-Output "Environment variables:"
+          Get-ChildItem env: | Where-Object { $_.Name -match "CI|GITHUB|RUST" } | ForEach-Object {
+            Write-Output "  $($_.Name)=$($_.Value)"
+          }
+        shell: powershell
 
   node-tests-windows:
     name: Node.js Tests (Windows)
@@ -111,6 +124,24 @@ jobs:
 
       - name: Run tests
         run: bun test
+        shell: powershell
+
+      - name: Debug Node.js test failure info
+        if: failure()
+        run: |
+          Write-Output "=== Node.js Test Debug Information ==="
+          Write-Output "Node version: $(node --version)"
+          Write-Output "Bun version: $(bun --version)"
+          Write-Output "Architecture: $env:PROCESSOR_ARCHITECTURE"
+          Write-Output "Generated files:"
+          Get-ChildItem "*.node" -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Output "  $($_.Name) - $($_.Length) bytes"
+          }
+          Write-Output "Environment variables:"
+          Get-ChildItem env: | Where-Object { $_.Name -match "CI|GITHUB|NODE|BUN" } | ForEach-Object {
+            Write-Output "  $($_.Name)=$($_.Value)"
+          }
+        shell: powershell
 
   build-windows:
     name: Build Windows Binaries
