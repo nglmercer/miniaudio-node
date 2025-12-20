@@ -17,7 +17,7 @@
 - 📝 **TypeScript Ready** - Full type definitions included
 - 🛡️ **Memory Safe** - Rust's ownership system prevents memory leaks
 - ⚡ **Bun Optimized** - Built for Bun's high-performance runtime
-- 🧪 **Well Tested** - Comprehensive test suite with Bun test (38/38 passing)
+- 🧪 **Well Tested** - Comprehensive test suite with Bun test (58/58 passing)
 - 📦 **Zero Dependencies** - No external audio runtime required
 - 🔧 **Helper Functions** - Convenient `createAudioPlayer` and `quickPlay` utilities
 
@@ -74,6 +74,77 @@ setTimeout(() => {
   player.stop()
   console.log('⏹️ Stopped')
 }, 10000)
+```
+
+### Buffer and Base64 Loading
+
+```typescript
+import { AudioPlayer } from 'miniaudio_node'
+
+// Load audio from buffer data (e.g., from fetch API or file reading)
+const player = new AudioPlayer()
+
+// Example: Load from buffer (minimal WAV file data)
+const wavBuffer = [
+  0x52, 0x49, 0x46, 0x46, // "RIFF"
+  0x24, 0x00, 0x00, 0x00, // File size - 8
+  0x57, 0x41, 0x56, 0x45, // "WAVE"
+  0x66, 0x6D, 0x74, 0x20, // "fmt "
+  0x10, 0x00, 0x00, 0x00, // Format chunk size
+  0x01, 0x00,             // Audio format (PCM)
+  0x01, 0x00,             // Number of channels
+  0x44, 0xAC, 0x00, 0x00, // Sample rate (44100)
+  0x88, 0x58, 0x01, 0x00, // Byte rate
+  0x02, 0x00,             // Block align
+  0x10, 0x00,             // Bits per sample
+  0x64, 0x61, 0x74, 0x61, // "data"
+  0x04, 0x00, 0x00, 0x00, // Data chunk size
+  0x00, 0x00, 0x00, 0x00  // 4 bytes of silence
+]
+
+player.loadBuffer(wavBuffer)
+player.play()
+
+// Load from base64 encoded audio
+const player2 = new AudioPlayer()
+const base64Audio = 'UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQQAAAAA'
+
+player2.loadBase64(base64Audio)
+player2.play()
+```
+
+### Real-world Buffer Loading Example
+
+```typescript
+import { AudioPlayer } from 'miniaudio_node'
+
+// Example: Loading audio from fetch API
+async function loadAudioFromUrl(url: string) {
+  const response = await fetch(url)
+  const arrayBuffer = await response.arrayBuffer()
+  const audioData = Array.from(new Uint8Array(arrayBuffer))
+  
+  const player = new AudioPlayer()
+  player.loadBuffer(audioData)
+  player.play()
+}
+
+// Example: Loading from file input
+function handleFileInput(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    const arrayBuffer = e.target?.result as ArrayBuffer
+    const audioData = Array.from(new Uint8Array(arrayBuffer))
+    
+    const player = new AudioPlayer()
+    player.loadBuffer(audioData)
+    player.play()
+  }
+  reader.readAsArrayBuffer(file)
+}
 ```
 
 ### Helper Functions
@@ -145,6 +216,8 @@ const player = new AudioPlayer()
 | Method | Description | Parameters | Returns |
 |--------|-------------|------------|---------|
 | `loadFile(filePath)` | Load audio file for playback | `string` - Path to audio file | `void` |
+| `loadBuffer(audioData)` | Load audio from buffer data | `number[]` - Audio buffer data | `void` |
+| `loadBase64(base64Data)` | Load audio from base64 string | `string` - Base64 encoded audio | `void` |
 | `play()` | Start or resume playback | `none` | `void` |
 | `pause()` | Pause current playback | `none` | `void` |
 | `stop()` | Stop playback and clear queue | `none` | `void` |
@@ -294,16 +367,18 @@ bun test tests/integration/playback.test.ts
 The test suite includes:
 - ✅ Unit tests for all major functionality
 - ✅ Integration tests with real audio files
+- ✅ Buffer and Base64 loading tests
 - ✅ Performance benchmarks
 - ✅ Error handling validation
 - ✅ Cross-platform compatibility
 
 ### Current Test Status ✅
 
-- **All 38 tests passing** 🎉
+- **All 58 tests passing** 🎉
 - **0 test failures** ✨
 - **Complete coverage** of core API functionality
 - **Cross-platform compatibility** verified
+- **Buffer and Base64 loading** fully tested
 
 ## 📊 Performance
 
