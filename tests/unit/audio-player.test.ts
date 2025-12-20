@@ -197,6 +197,144 @@ describe('AudioPlayer', () => {
     })
   })
 
+  describe('Buffer Loading', () => {
+    it('should load valid audio buffer', () => {
+      if (!isAudioSystemAvailable()) {
+        console.warn('Skipping test: Audio system not available')
+        return
+      }
+      
+      // Create a minimal valid WAV file buffer (44 bytes header + 4 bytes data)
+      const wavHeader = [
+        0x52, 0x49, 0x46, 0x46, // "RIFF"
+        0x24, 0x00, 0x00, 0x00, // File size - 8
+        0x57, 0x41, 0x56, 0x45, // "WAVE"
+        0x66, 0x6D, 0x74, 0x20, // "fmt "
+        0x10, 0x00, 0x00, 0x00, // Format chunk size
+        0x01, 0x00,             // Audio format (PCM)
+        0x01, 0x00,             // Number of channels
+        0x44, 0xAC, 0x00, 0x00, // Sample rate (44100)
+        0x88, 0x58, 0x01, 0x00, // Byte rate
+        0x02, 0x00,             // Block align
+        0x10, 0x00,             // Bits per sample
+        0x64, 0x61, 0x74, 0x61, // "data"
+        0x04, 0x00, 0x00, 0x00, // Data chunk size
+        0x00, 0x00, 0x00, 0x00  // 4 bytes of silence
+      ]
+      
+      expect(() => player.loadBuffer(wavHeader)).not.toThrow()
+      expect(player.getState()).toBe(PlaybackState.Loaded)
+    })
+
+    it('should throw error for empty buffer', () => {
+      if (!isAudioSystemAvailable()) {
+        console.warn('Skipping test: Audio system not available')
+        return
+      }
+      
+      const emptyBuffer: number[] = []
+      expect(() => player.loadBuffer(emptyBuffer)).toThrow('Audio buffer is empty')
+    })
+
+    it('should throw error for invalid audio buffer', () => {
+      if (!isAudioSystemAvailable()) {
+        console.warn('Skipping test: Audio system not available')
+        return
+      }
+      
+      const invalidBuffer = [1, 2, 3, 4, 5]
+      expect(() => player.loadBuffer(invalidBuffer)).toThrow()
+    })
+
+    it('should update current file to buffer identifier', () => {
+      if (!isAudioSystemAvailable()) {
+        console.warn('Skipping test: Audio system not available')
+        return
+      }
+      
+      // Create a minimal valid WAV file buffer
+      const wavHeader = [
+        0x52, 0x49, 0x46, 0x46, // "RIFF"
+        0x24, 0x00, 0x00, 0x00, // File size - 8
+        0x57, 0x41, 0x56, 0x45, // "WAVE"
+        0x66, 0x6D, 0x74, 0x20, // "fmt "
+        0x10, 0x00, 0x00, 0x00, // Format chunk size
+        0x01, 0x00,             // Audio format (PCM)
+        0x01, 0x00,             // Number of channels
+        0x44, 0xAC, 0x00, 0x00, // Sample rate (44100)
+        0x88, 0x58, 0x01, 0x00, // Byte rate
+        0x02, 0x00,             // Block align
+        0x10, 0x00,             // Bits per sample
+        0x64, 0x61, 0x74, 0x61, // "data"
+        0x04, 0x00, 0x00, 0x00, // Data chunk size
+        0x00, 0x00, 0x00, 0x00  // 4 bytes of silence
+      ]
+      
+      player.loadBuffer(wavHeader)
+      const currentFile = player.getCurrentFile()
+      expect(currentFile).toContain('__BUFFER__')
+    })
+  })
+
+  describe('Base64 Loading', () => {
+    it('should load valid base64 audio data', () => {
+      if (!isAudioSystemAvailable()) {
+        console.warn('Skipping test: Audio system not available')
+        return
+      }
+      
+      // Base64 encoded minimal WAV file (same as above)
+      const base64Wav = 'UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQQAAAAA'
+      
+      expect(() => player.loadBase64(base64Wav)).not.toThrow()
+      expect(player.getState()).toBe(PlaybackState.Loaded)
+    })
+
+    it('should throw error for empty base64 string', () => {
+      if (!isAudioSystemAvailable()) {
+        console.warn('Skipping test: Audio system not available')
+        return
+      }
+      
+      expect(() => player.loadBase64('')).toThrow('Base64 data is empty')
+    })
+
+    it('should throw error for invalid base64 string', () => {
+      if (!isAudioSystemAvailable()) {
+        console.warn('Skipping test: Audio system not available')
+        return
+      }
+      
+      expect(() => player.loadBase64('invalid-base64!')).toThrow()
+    })
+
+    it('should throw error for base64 with invalid audio data', () => {
+      if (!isAudioSystemAvailable()) {
+        console.warn('Skipping test: Audio system not available')
+        return
+      }
+      
+      // Valid base64 but invalid audio data
+      const invalidAudioBase64 = 'SGVsbG8gV29ybGQ=' // "Hello World" in base64
+      
+      expect(() => player.loadBase64(invalidAudioBase64)).toThrow()
+    })
+
+    it('should update current file to buffer identifier', () => {
+      if (!isAudioSystemAvailable()) {
+        console.warn('Skipping test: Audio system not available')
+        return
+      }
+      
+      // Base64 encoded minimal WAV file
+      const base64Wav = 'UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQQAAAAA'
+      
+      player.loadBase64(base64Wav)
+      const currentFile = player.getCurrentFile()
+      expect(currentFile).toContain('__BUFFER__')
+    })
+  })
+
   describe('Metadata', () => {
     it('should return duration as number', () => {
       if (!isAudioSystemAvailable()) {

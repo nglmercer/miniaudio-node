@@ -39,6 +39,8 @@ export declare class AudioPlayer {
   constructor()
   getDevices(): Array<AudioDeviceInfo>
   loadFile(filePath: string): void
+  loadBuffer(audioData: Array<number>): void
+  loadBase64(base64Data: string): void
   play(): void
   pause(): void
   stop(): void

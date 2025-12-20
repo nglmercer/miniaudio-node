@@ -247,7 +247,7 @@ async function runAdvancedExample(): Promise<void> {
 
     // Example 2: Playlist management
     console.log("\n🎵 Playlist Management Example");
-    const playlist = new PlaylistManager({ volume: 0.7, loopPlayback: true });
+    const playlist = new PlaylistManager({ volume: 0.7, autoPlay: true });
 
     // Load system sounds (platform-specific)
     const systemSounds =

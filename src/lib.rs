@@ -3,11 +3,12 @@
 
 #![allow(clippy::arc_with_non_send_sync)]
 
+use base64::{Engine as _, engine::general_purpose};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Cursor};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -42,6 +43,7 @@ pub struct AudioPlayer {
     sink: Arc<Mutex<Option<Sink>>>,
     output_stream: Arc<Mutex<Option<OutputStream>>>,
     stream_handle: Arc<Mutex<Option<OutputStreamHandle>>>,
+    audio_buffer: Arc<Mutex<Option<Vec<u8>>>>,
 }
 
 impl Default for AudioPlayer {
@@ -54,6 +56,7 @@ impl Default for AudioPlayer {
             sink: Arc::new(Mutex::new(None)),
             output_stream: Arc::new(Mutex::new(None)),
             stream_handle: Arc::new(Mutex::new(None)),
+            audio_buffer: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -115,35 +118,107 @@ impl AudioPlayer {
     }
 
     #[napi]
+    pub fn load_buffer(&mut self, audio_data: Vec<u8>) -> Result<()> {
+        if audio_data.is_empty() {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Audio buffer is empty",
+            ));
+        }
+
+        // Stop current playback
+        self.stop().ok();
+
+        // Validate the audio data by trying to create a decoder
+        let cursor = Cursor::new(audio_data.clone());
+        let _decoder = Decoder::new(cursor).map_err(|e| {
+            Error::new(
+                Status::InvalidArg,
+                format!("Failed to decode audio buffer: {}", e),
+            )
+        })?;
+
+        // Store the audio data for playback
+        *self.duration.lock().unwrap() = 0.0;
+        *self.audio_buffer.lock().unwrap() = Some(audio_data);
+        self.current_file = Some(format!("__BUFFER__{}", std::time::SystemTime::now().elapsed().unwrap().as_millis()));
+        *self.state.lock().unwrap() = PlaybackState::Loaded;
+
+        Ok(())
+    }
+
+    #[napi]
+    pub fn load_base64(&mut self, base64_data: String) -> Result<()> {
+        if base64_data.is_empty() {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Base64 data is empty",
+            ));
+        }
+
+        // Decode base64 to bytes using the standard engine
+        let audio_data = match general_purpose::STANDARD.decode(&base64_data) {
+            Ok(data) => data,
+            Err(e) => {
+                return Err(Error::new(
+                    Status::InvalidArg,
+                    format!("Failed to decode base64: {}", e),
+                ));
+            }
+        };
+
+        self.load_buffer(audio_data)
+    }
+
+    #[napi]
     pub fn play(&mut self) -> Result<()> {
         let current_state = *self.state.lock().unwrap();
         if current_state != PlaybackState::Playing {
-            if let Some(file_path) = &self.current_file {
-                let path = Path::new(file_path);
+            // Check if we have a buffer or file to play
+            let has_buffer = self.audio_buffer.lock().unwrap().is_some();
+            let has_file = self.current_file.is_some();
 
-                // Create output stream if not exists
-                let mut stream_handle_guard = self.stream_handle.lock().unwrap();
-                let mut output_stream_guard = self.output_stream.lock().unwrap();
+            if !has_buffer && !has_file {
+                return Err(Error::new(Status::InvalidArg, "Player not initialized"));
+            }
 
-                if stream_handle_guard.is_none() {
-                    match OutputStream::try_default() {
-                        Ok((stream, handle)) => {
-                            *stream_handle_guard = Some(handle);
-                            *output_stream_guard = Some(stream);
-                        }
-                        Err(e) => {
-                            return Err(Error::new(
-                                Status::GenericFailure,
-                                format!("Failed to create output stream: {}", e),
-                            ));
-                        }
+            // Create output stream if not exists
+            let mut stream_handle_guard = self.stream_handle.lock().unwrap();
+            let mut output_stream_guard = self.output_stream.lock().unwrap();
+
+            if stream_handle_guard.is_none() {
+                match OutputStream::try_default() {
+                    Ok((stream, handle)) => {
+                        *stream_handle_guard = Some(handle);
+                        *output_stream_guard = Some(stream);
+                    }
+                    Err(e) => {
+                        return Err(Error::new(
+                            Status::GenericFailure,
+                            format!("Failed to create output stream: {}", e),
+                        ));
                     }
                 }
+            }
 
-                let stream_handle = stream_handle_guard.as_ref().unwrap();
-                match Sink::try_new(stream_handle) {
-                    Ok(sink) => {
-                        // Load and play the file
+            let stream_handle = stream_handle_guard.as_ref().unwrap();
+            match Sink::try_new(stream_handle) {
+                Ok(sink) => {
+                    // Check if we have buffer data first
+                    if let Some(buffer_data) = self.audio_buffer.lock().unwrap().clone() {
+                        // Play from buffer
+                        let cursor = Cursor::new(buffer_data);
+                        let source = Decoder::new(cursor).map_err(|e| {
+                            Error::new(
+                                Status::InvalidArg,
+                                format!("Failed to create decoder from buffer: {}", e),
+                            )
+                        })?;
+
+                        sink.append(source);
+                    } else if let Some(file_path) = &self.current_file {
+                        // Play from file
+                        let path = Path::new(file_path);
                         let file = File::open(path).map_err(|e| {
                             Error::new(Status::InvalidArg, format!("Failed to open file: {}", e))
                         })?;
@@ -156,20 +231,19 @@ impl AudioPlayer {
                         })?;
 
                         sink.append(source);
-                        sink.set_volume(*self.volume.lock().unwrap());
+                    }
 
-                        *self.sink.lock().unwrap() = Some(sink);
-                        *self.state.lock().unwrap() = PlaybackState::Playing;
-                    }
-                    Err(e) => {
-                        return Err(Error::new(
-                            Status::GenericFailure,
-                            format!("Failed to create sink: {}", e),
-                        ));
-                    }
+                    sink.set_volume(*self.volume.lock().unwrap());
+
+                    *self.sink.lock().unwrap() = Some(sink);
+                    *self.state.lock().unwrap() = PlaybackState::Playing;
                 }
-            } else {
-                return Err(Error::new(Status::InvalidArg, "Player not initialized"));
+                Err(e) => {
+                    return Err(Error::new(
+                        Status::GenericFailure,
+                        format!("Failed to create sink: {}", e),
+                    ));
+                }
             }
         }
 
@@ -195,7 +269,7 @@ impl AudioPlayer {
 
     #[napi]
     pub fn stop(&mut self) -> Result<()> {
-        if self.current_file.is_none() {
+        if self.current_file.is_none() && self.audio_buffer.lock().unwrap().is_none() {
             return Err(Error::new(Status::InvalidArg, "Player not initialized"));
         }
 
@@ -204,8 +278,9 @@ impl AudioPlayer {
             sink.stop();
         }
 
-        // Clear sink
+        // Clear sink and buffer
         *self.sink.lock().unwrap() = None;
+        *self.audio_buffer.lock().unwrap() = None;
 
         *self.state.lock().unwrap() = PlaybackState::Stopped;
         *self.duration.lock().unwrap() = 0.0;
