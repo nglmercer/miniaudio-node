@@ -3,7 +3,7 @@
 
 #![allow(clippy::arc_with_non_send_sync)]
 
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
@@ -120,10 +120,7 @@ impl AudioPlayer {
     #[napi]
     pub fn load_buffer(&mut self, audio_data: Vec<u8>) -> Result<()> {
         if audio_data.is_empty() {
-            return Err(Error::new(
-                Status::InvalidArg,
-                "Audio buffer is empty",
-            ));
+            return Err(Error::new(Status::InvalidArg, "Audio buffer is empty"));
         }
 
         // Stop current playback
@@ -141,7 +138,10 @@ impl AudioPlayer {
         // Store the audio data for playback
         *self.duration.lock().unwrap() = 0.0;
         *self.audio_buffer.lock().unwrap() = Some(audio_data);
-        self.current_file = Some(format!("__BUFFER__{}", std::time::SystemTime::now().elapsed().unwrap().as_millis()));
+        self.current_file = Some(format!(
+            "__BUFFER__{}",
+            std::time::SystemTime::now().elapsed().unwrap().as_millis()
+        ));
         *self.state.lock().unwrap() = PlaybackState::Loaded;
 
         Ok(())
@@ -150,10 +150,7 @@ impl AudioPlayer {
     #[napi]
     pub fn load_base64(&mut self, base64_data: String) -> Result<()> {
         if base64_data.is_empty() {
-            return Err(Error::new(
-                Status::InvalidArg,
-                "Base64 data is empty",
-            ));
+            return Err(Error::new(Status::InvalidArg, "Base64 data is empty"));
         }
 
         // Decode base64 to bytes using the standard engine
