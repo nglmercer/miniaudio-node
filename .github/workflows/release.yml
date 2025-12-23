@@ -137,7 +137,6 @@ jobs:
     name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
-    environment: NPM_TOKEN
     permissions:
       contents: write
       id-token: write
