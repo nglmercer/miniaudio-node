@@ -228,11 +228,16 @@ jobs:
 
       - name: Publish to npm
         run: |
+          # Aseguramos la versión más reciente de npm para OIDC
+          npm install -g npm@latest
+
           cd release
-          # 1. Eliminamos cualquier configuración de registro previa para este comando
-          # 2. Obligamos a usar el registro oficial sin tokens pre-configurados
-          # 3. La flag --provenance activará el intercambio de tokens OIDC
-          npm publish --access public --provenance --registry=https://registry.npmjs.org/
+
+          # Eliminamos cualquier configuración residual que pida tokens tradicionales
+          rm -f .npmrc
+          rm -f ~/.npmrc
+
+          # Publicamos usando OIDC (la flag --provenance es la que dispara el proceso)
+          npm publish --access public --provenance
         env:
-          # IMPORTANTE: No definas NODE_AUTH_TOKEN aquí
           NAPI_RS_LINK_TYPE: dynamic
