@@ -229,5 +229,10 @@ jobs:
       - name: Publish to npm
         run: |
           cd release
-          # NO usamos secretos, OIDC lo hace solo
-          npm publish --access public --provenance
+          # 1. Eliminamos cualquier configuración de registro previa para este comando
+          # 2. Obligamos a usar el registro oficial sin tokens pre-configurados
+          # 3. La flag --provenance activará el intercambio de tokens OIDC
+          npm publish --access public --provenance --registry=https://registry.npmjs.org/
+        env:
+          # IMPORTANTE: No definas NODE_AUTH_TOKEN aquí
+          NAPI_RS_LINK_TYPE: dynamic
