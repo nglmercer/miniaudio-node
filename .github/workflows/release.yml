@@ -156,44 +156,52 @@ jobs:
       - name: Organize release files
         run: |
           mkdir -p release
+          echo "Current directory: $(pwd)"
+          echo "Contents of artifacts directory:"
+          ls -R artifacts/ || echo "artifacts directory not found"
+
           # Find and copy all .node files from their artifact directories
-          # Artifacts are now in dist/ subdirectories
-          find artifacts -name "*.node" -type f -exec cp {} release/ \;
+          echo "Copying .node files to release folder..."
+          find artifacts -name "*.node" -type f -exec cp -v {} release/ \;
+
+          # Verify files were copied
+          echo "Contents of release directory:"
           ls -la release/
 
-          # Verify we have all expected artifacts
-          echo "Checking for expected release files:"
-          ls -la release/
-
-          # Verify specific files
-          for file in miniaudio_node.darwin-x64.node miniaudio_node.linux-x64-gnu.node miniaudio_node.darwin-arm64.node miniaudio_node.win32-x64-msvc.node; do
+          # Check for expected files (dynamic check based on matrix artifacts)
+          EXPECTED_FILES="miniaudio_node.darwin-x64.node miniaudio_node.linux-x64-gnu.node miniaudio_node.darwin-arm64.node miniaudio_node.win32-x64-msvc.node"
+          for file in $EXPECTED_FILES; do
             if [ -f "release/$file" ]; then
               echo "✅ Found $file"
             else
               echo "❌ Missing $file"
+              # Don't exit yet, let the diagnostic info show
             fi
           done
 
-          # Show debug info if files are missing
-          if ! ls release/*.node 1> /dev/null 2>&1; then
-            echo "No .node files found in release/, showing artifacts structure:"
-            echo "--- Artifacts directory structure ---"
-            find artifacts -type d || true
-            echo "--- All .node files in artifacts ---"
-            find artifacts -type f -name "*.node" || true
+          # Fail if no .node files were found
+          if [ $(ls release/*.node 2>/dev/null | wc -l) -eq 0 ]; then
+            echo "FATAL: No .node files found in release directory!"
+            exit 1
           fi
 
-      - name: Create package.json for distribution
+      - name: Prepare package for distribution
         run: |
-          # Extract version from git tag and update package.json
+          # Get version from tag (e.g., v1.0.2 -> 1.0.2)
           VERSION=$(echo ${{ github.ref_name }} | sed 's/^v//')
-          sed -i "s/\"version\": \"1.0.0\"/\"version\": \"$VERSION\"/" package.json
+          echo "Releasing version: $VERSION"
 
-          # Copy files for release
+          # Update version in package.json using a more robust sed pattern
+          # This replaces "version": "ANYTHING" with "version": "VERSION"
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" package.json
+
+          # Copy essential files for release
           cp package.json release/
           cp index.js release/
           cp index.d.ts release/
+          cp README.md release/ || echo "Warning: README.md not found"
 
+          echo "Final release package structure:"
           ls -la release/
 
       - name: Create GitHub Release
