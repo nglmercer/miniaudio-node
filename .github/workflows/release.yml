@@ -147,8 +147,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          registry-url: "https://registry.npmjs.org/"
-          # Esto generará un archivo .npmrc apuntando a NPM_TOKEN automáticamente
+
       - name: Install Bun
         uses: oven-sh/setup-bun@v1
         with:
@@ -232,4 +231,3 @@ jobs:
           cd release
           # NO usamos secretos, OIDC lo hace solo
           npm publish --access public --provenance
-        # Borra la sección 'env' que tiene el NODE_AUTH_TOKEN
