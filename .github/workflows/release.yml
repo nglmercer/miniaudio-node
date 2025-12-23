@@ -137,6 +137,7 @@ jobs:
     name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
+    environment: NPM_TOKEN
     permissions:
       contents: write
       id-token: write
@@ -147,7 +148,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-
+          registry-url: "https://registry.npmjs.org/" # Required for OIDC
       - name: Install Bun
         uses: oven-sh/setup-bun@v1
         with:
@@ -227,4 +228,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish to npm
-        run: cd release && npm publish --access public --provenance
+        run: |
+          cd release
+          npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} # Even with provenance, npm often expects this env var to be present
