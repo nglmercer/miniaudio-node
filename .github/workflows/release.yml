@@ -230,8 +230,6 @@ jobs:
       - name: Publish to npm
         run: |
           cd release
-          # Creamos el archivo de auth dentro de la carpeta donde vamos a publicar
-          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > .npmrc
+          # NO usamos secretos, OIDC lo hace solo
           npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # Borra la sección 'env' que tiene el NODE_AUTH_TOKEN
