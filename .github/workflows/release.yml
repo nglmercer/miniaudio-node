@@ -220,12 +220,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish to npm
-        # NOTE: For this to work without an OTP error (EOTP),
-        # the NPM_TOKEN must be of type "Automation".
-        # Automation tokens bypass 2FA for publishing.
+        # Using npm Trusted Publisher (OIDC)
+        # This eliminates the need for NPM_TOKEN and avoids EOTP errors.
         run: |
           cd release
-          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > .npmrc
           npm publish --access public --provenance --ignore-scripts
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
