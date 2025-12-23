@@ -221,7 +221,6 @@ jobs:
 
       - name: Publish to npm
         # Using npm Trusted Publisher (OIDC)
-        # This eliminates the need for NPM_TOKEN and avoids EOTP errors.
-        run: |
-          cd release
-          npm publish --access public --provenance --ignore-scripts
+        # We publish the 'release' directory directly. npm will detect the
+        # GitHub Actions OIDC token automatically for authentication.
+        run: npm publish ./release --access public --provenance --ignore-scripts
