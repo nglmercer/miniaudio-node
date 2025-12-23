@@ -148,7 +148,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          registry-url: "https://registry.npmjs.org/" # Required for OIDC
+          registry-url: "https://registry.npmjs.org/"
+          # Esto generará un archivo .npmrc apuntando a NPM_TOKEN automáticamente
       - name: Install Bun
         uses: oven-sh/setup-bun@v1
         with:
@@ -230,6 +231,8 @@ jobs:
       - name: Publish to npm
         run: |
           cd release
+          # Creamos el archivo de auth dentro de la carpeta donde vamos a publicar
+          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > .npmrc
           npm publish --access public --provenance
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} # Even with provenance, npm often expects this env var to be present
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
