@@ -147,7 +147,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-
+          registry-url: "https://registry.npmjs.org"
       - name: Install Bun
         uses: oven-sh/setup-bun@v1
         with:
@@ -228,16 +228,17 @@ jobs:
 
       - name: Publish to npm
         run: |
-          # Aseguramos la versión más reciente de npm para OIDC
+          # Opcional: Node 20 ya trae npm v10+, pero asegurar latest está bien
           npm install -g npm@latest
 
           cd release
 
-          # Eliminamos cualquier configuración residual que pida tokens tradicionales
-          rm -f .npmrc
-          rm -f ~/.npmrc
-
-          # Publicamos usando OIDC (la flag --provenance es la que dispara el proceso)
+          # Publicamos. npm usará el OIDC token automáticamente gracias a --provenance
           npm publish --access public --provenance
         env:
+          # Con Trusted Publishing y setup-node configurado,
+          # NODE_AUTH_TOKEN suele ser manejado internamente o se usa el OIDC directo.
+          # Si npm te sigue pidiendo auth, define esto apuntando a una variable vacía o dummy
+          # para satisfacer la validación inicial de setup-node, pero OIDC hará el resto.
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NAPI_RS_LINK_TYPE: dynamic
