@@ -1,0 +1,56 @@
+# Development files
+.github/
+.git/
+.gitignore
+.gitattributes
+
+# Rust/Cargo files
+Cargo.toml
+Cargo.lock
+src/
+target/
+.cargo/
+rustfmt.toml
+
+# Test files
+tests/
+examples/
+*.test.ts
+*.test.js
+
+# Documentation
+docs/
+PROJECT_STRUCTURE.md
+PUBLISH.md
+CHANGELOG.md
+
+# Build artifacts
+*.node
+!/dist/*.node
+
+# Scripts
+scripts/
+.napirc.json
+napi.json
+
+# Package manager files
+node_modules/
+bun.lock
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# CI/CD
+*.yml
+!/dist/package.json
