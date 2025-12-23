@@ -1,6 +1,6 @@
 {
   "name": "miniaudio_node",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "High-performance native audio playback for Node.js and Bun. Built with Rust and the powerful rodio audio engine.",
   "keywords": [
     "audio",
