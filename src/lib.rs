@@ -201,6 +201,11 @@ impl AudioPlayer {
             let stream_handle = stream_handle_guard.as_ref().unwrap();
             match Sink::try_new(stream_handle) {
                 Ok(sink) => {
+                    // Set volume BEFORE appending the source to prevent audio cut-off
+                    // This ensures the correct volume is applied from the very first sample
+                    let volume = *self.volume.lock().unwrap();
+                    sink.set_volume(volume);
+
                     // Check if we have buffer data first
                     if let Some(buffer_data) = self.audio_buffer.lock().unwrap().clone() {
                         // Play from buffer
@@ -229,8 +234,6 @@ impl AudioPlayer {
 
                         sink.append(source);
                     }
-
-                    sink.set_volume(*self.volume.lock().unwrap());
 
                     *self.sink.lock().unwrap() = Some(sink);
                     *self.state.lock().unwrap() = PlaybackState::Playing;
