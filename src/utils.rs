@@ -1,8 +1,9 @@
-use crate::types::AudioMetadata;
+use crate::types::{AudioMetadata, DEBUG_ENABLED};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
 use rodio::{OutputStreamBuilder, Sink, Source};
 use std::path::Path;
+use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
 
@@ -15,6 +16,18 @@ pub fn initialize_audio() -> Result<String> {
             format!("Failed to initialize audio: {}", e),
         )),
     }
+}
+
+/// Enable or disable debug logging (defaults to false)
+#[napi]
+pub fn set_debug(enabled: bool) {
+    DEBUG_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Get current debug logging state
+#[napi]
+pub fn is_debug_enabled() -> bool {
+    DEBUG_ENABLED.load(Ordering::Relaxed)
 }
 
 #[napi]

@@ -8,6 +8,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 // Importamos los tipos definidos en el otro módulo
+use crate::debug_log;
 use crate::types::{AudioDeviceInfo, AudioPlayerConfig, PlaybackState};
 
 /// Thread-safe audio player with rodio backend
@@ -62,8 +63,10 @@ impl AudioPlayer {
 
     #[napi]
     pub fn load_file(&mut self, file_path: String) -> Result<()> {
+        debug_log!("Loading file: {}", file_path);
         let path = Path::new(&file_path);
         if !path.exists() {
+            debug_log!("File not found: {}", file_path);
             return Err(Error::new(
                 Status::InvalidArg,
                 format!("File not found: {}", file_path),
@@ -86,13 +89,16 @@ impl AudioPlayer {
         *self.duration.lock().unwrap() = 0.0;
         self.current_file = Some(file_path);
         *self.state.lock().unwrap() = PlaybackState::Loaded;
+        debug_log!("File loaded successfully");
 
         Ok(())
     }
 
     #[napi]
     pub fn load_buffer(&mut self, audio_data: Vec<u8>) -> Result<()> {
+        debug_log!("Loading buffer ({} bytes)", audio_data.len());
         if audio_data.is_empty() {
+            debug_log!("Audio buffer is empty");
             return Err(Error::new(Status::InvalidArg, "Audio buffer is empty"));
         }
         self.stop().ok();
@@ -112,13 +118,16 @@ impl AudioPlayer {
             std::time::SystemTime::now().elapsed().unwrap().as_millis()
         ));
         *self.state.lock().unwrap() = PlaybackState::Loaded;
+        debug_log!("Buffer loaded successfully");
 
         Ok(())
     }
 
     #[napi]
     pub fn load_base64(&mut self, base64_data: String) -> Result<()> {
+        debug_log!("Loading base64 audio data");
         if base64_data.is_empty() {
+            debug_log!("Base64 data is empty");
             return Err(Error::new(Status::InvalidArg, "Base64 data is empty"));
         }
         let audio_data = general_purpose::STANDARD
@@ -134,18 +143,22 @@ impl AudioPlayer {
 
     #[napi]
     pub fn play(&mut self) -> Result<()> {
-        let current_state = *self.state.lock().unwrap();
+        let has_buffer = self.audio_buffer.lock().unwrap().is_some();
+        let has_file = self.current_file.is_some();
+
+        if !has_buffer && !has_file {
+            debug_log!("Play called but player not initialized");
+            return Err(Error::new(Status::InvalidArg, "Player not initialized"));
+        }
+
+        let current_state = self.state.lock().unwrap().clone();
+        debug_log!("Play called, current state: {:?}", current_state);
         if current_state != PlaybackState::Playing {
-            let has_buffer = self.audio_buffer.lock().unwrap().is_some();
-            let has_file = self.current_file.is_some();
-
-            if !has_buffer && !has_file {
-                return Err(Error::new(Status::InvalidArg, "Player not initialized"));
-            }
-
             let mut output_stream_guard = self.output_stream.lock().unwrap();
             if output_stream_guard.is_none() {
+                debug_log!("Creating output stream...");
                 let stream = OutputStreamBuilder::open_default_stream().map_err(|e| {
+                    debug_log!("Failed to create output stream: {}", e);
                     Error::new(
                         Status::GenericFailure,
                         format!("Failed to create output stream: {}", e),
@@ -154,6 +167,7 @@ impl AudioPlayer {
 
                 // We keep the stream alive
                 *output_stream_guard = Some(stream);
+                debug_log!("Output stream created");
 
                 // Create sink using the mixer from the output stream
                 let output_stream_ref = output_stream_guard.as_ref().unwrap();
@@ -169,41 +183,65 @@ impl AudioPlayer {
 
             let sink_guard = self.sink.lock().unwrap();
             if let Some(sink) = sink_guard.as_ref() {
-                sink.set_volume(*self.volume.lock().unwrap());
+                let volume = *self.volume.lock().unwrap();
+                sink.set_volume(volume);
+                debug_log!("Setting volume to: {}", volume);
 
                 if sink.empty() {
+                    debug_log!("Sink is empty, appending source...");
                     if let Some(buffer_data) = self.audio_buffer.lock().unwrap().clone() {
+                        debug_log!("Playing from buffer ({} bytes)", buffer_data.len());
                         let cursor = Cursor::new(buffer_data);
                         let source = Decoder::new(cursor).unwrap();
                         sink.append(source);
                     } else if let Some(file_path) = &self.current_file {
+                        debug_log!("Playing from file: {}", file_path);
                         let file = File::open(file_path).unwrap();
                         let source = Decoder::new(BufReader::new(file)).unwrap();
                         sink.append(source);
                     }
                     sink.play();
+                    debug_log!("Sink playing");
                 } else {
+                    debug_log!("Resuming paused audio");
                     sink.play(); // Resume if paused
                 }
             }
 
             *self.state.lock().unwrap() = PlaybackState::Playing;
+            debug_log!("State set to Playing");
         }
         Ok(())
     }
 
     #[napi]
     pub fn pause(&mut self) -> Result<()> {
-        if let Some(sink) = self.sink.lock().unwrap().as_ref() {
+        debug_log!("Pause called");
+        let sink_guard = self.sink.lock().unwrap();
+        if let Some(sink) = sink_guard.as_ref() {
             sink.pause();
             *self.state.lock().unwrap() = PlaybackState::Paused;
+            debug_log!("State set to Paused");
+            Ok(())
+        } else {
+            debug_log!("Cannot pause - player not initialized");
+            Err(Error::new(Status::InvalidArg, "Player not initialized"))
         }
-        Ok(())
     }
 
     #[napi]
     pub fn stop(&mut self) -> Result<()> {
+        debug_log!("Stop called");
+        let has_buffer = self.audio_buffer.lock().unwrap().is_some();
+        let has_file = self.current_file.is_some();
+
+        if !has_buffer && !has_file {
+            debug_log!("Cannot stop - player not initialized");
+            return Err(Error::new(Status::InvalidArg, "Player not initialized"));
+        }
+
         if let Some(sink) = self.sink.lock().unwrap().as_ref() {
+            debug_log!("Stopping sink");
             sink.stop();
         }
         // Re-create sink logic might be needed here depending on rodio version behavior,
@@ -212,15 +250,25 @@ impl AudioPlayer {
         *self.audio_buffer.lock().unwrap() = None;
         *self.state.lock().unwrap() = PlaybackState::Stopped;
         self.current_file = None;
+        debug_log!("State set to Stopped");
         Ok(())
     }
 
     #[napi]
     pub fn set_volume(&mut self, volume: f64) -> Result<()> {
-        let vol = volume.max(0.0).min(1.0) as f32;
+        debug_log!("Setting volume to: {}", volume);
+        if !(0.0..=1.0).contains(&volume) {
+            debug_log!("Invalid volume range: {}", volume);
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Volume must be between 0.0 and 1.0",
+            ));
+        }
+        let vol = volume as f32;
         *self.volume.lock().unwrap() = vol;
         if let Some(sink) = self.sink.lock().unwrap().as_ref() {
             sink.set_volume(vol);
+            debug_log!("Volume set on sink: {}", volume);
         }
         Ok(())
     }
@@ -241,7 +289,7 @@ impl AudioPlayer {
 
     #[napi]
     pub fn get_state(&self) -> PlaybackState {
-        *self.state.lock().unwrap()
+        self.state.lock().unwrap().clone()
     }
 
     #[napi]
