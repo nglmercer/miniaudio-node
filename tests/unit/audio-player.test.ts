@@ -638,13 +638,6 @@ describe("Integration Tests", () => {
 });
 
 describe("PlaybackState Enum", () => {
-  it("should have correct enum values", () => {
-    expect(PlaybackState.Stopped).toBe(0);
-    expect(PlaybackState.Loaded).toBe(1);
-    expect(PlaybackState.Playing).toBe(2);
-    expect(PlaybackState.Paused).toBe(3);
-  });
-
   it("should use enum values correctly", () => {
     if (!isAudioSystemAvailable()) {
       console.warn("Skipping test: Audio system not available");

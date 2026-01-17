@@ -35,7 +35,10 @@
     "examples:simple": "bun ./examples/simple-playback.ts",
     "examples:buffer": "bun ./examples/buffer-loading.ts",
     "examples:device": "bun ./examples/device-management.ts",
-    "examples:playlist": "bun ./examples/playlist.ts"
+    "examples:playlist": "bun ./examples/playlist.ts",
+    "examples:playlist-simple": "bun ./examples/playlist-advanced/simple-example.ts",
+    "examples:playlist-advanced": "bun ./examples/playlist-advanced/main.ts",
+    "examples:playlist-interactive": "bun ./examples/playlist-advanced/main.ts --interactive"
   },
   "main": "index.js",
   "types": "index.d.ts",

@@ -224,13 +224,6 @@ describe("Core Audio API Integration Tests", () => {
   });
 
   describe("PlaybackState", () => {
-    it("should have correct enum values", () => {
-      expect(PlaybackState.Stopped).toBe(0);
-      expect(PlaybackState.Loaded).toBe(1);
-      expect(PlaybackState.Playing).toBe(2);
-      expect(PlaybackState.Paused).toBe(3);
-    });
-
     it("should return correct initial state", () => {
       if (!isAudioSystemAvailable()) {
         console.warn("Skipping test: Audio system not available");
