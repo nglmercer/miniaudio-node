@@ -388,18 +388,18 @@ export declare function dbToLinear(db: number): number
 
 /** Decoder error types (for audio decoding operations) */
 export declare const enum DecoderError {
-  InvalidFormat = 0,
-  CorruptedData = 1,
-  UnsupportedCodec = 2,
-  IoError = 3
+  InvalidFormat = 'InvalidFormat',
+  CorruptedData = 'CorruptedData',
+  UnsupportedCodec = 'UnsupportedCodec',
+  IoError = 'IoError'
 }
 
 /** Error types for device operations */
 export declare const enum DevicesError {
-  NoDevicesFound = 0,
-  PermissionDenied = 1,
-  InvalidDevice = 2,
-  NotInitialized = 3
+  NoDevicesFound = 'NoDevicesFound',
+  PermissionDenied = 'PermissionDenied',
+  InvalidDevice = 'InvalidDevice',
+  NotInitialized = 'NotInitialized'
 }
 
 export declare function getAudioInfo(): string
@@ -443,19 +443,22 @@ export declare function pink(durationMs: number, sampleRate: number, channels: n
 /** Create and open a stream for audio playback */
 export declare function play(filePath: string): AudioStream
 
-/** Audio player state enumeration */
+/**
+ * Audio player state enumeration
+ * Audio player state enumeration
+ */
 export declare const enum PlaybackState {
-  Stopped = 0,
-  Loaded = 1,
-  Playing = 2,
-  Paused = 3
+  Stopped = 'Stopped',
+  Loaded = 'Loaded',
+  Playing = 'Playing',
+  Paused = 'Paused'
 }
 
 /** Play error for stream operations */
 export declare const enum PlayError {
-  AlreadyPlaying = 0,
-  NotLoaded = 1,
-  SystemError = 2
+  AlreadyPlaying = 'AlreadyPlaying',
+  NotLoaded = 'NotLoaded',
+  SystemError = 'SystemError'
 }
 
 /** Creates a new audio source queue */
@@ -477,9 +480,9 @@ export interface SampleTypeConversion {
 
 /** Seek error types */
 export declare const enum SeekError {
-  InvalidPosition = 0,
-  NotSeekable = 1,
-  OutOfBounds = 2
+  InvalidPosition = 'InvalidPosition',
+  NotSeekable = 'NotSeekable',
+  OutOfBounds = 'OutOfBounds'
 }
 
 /** Enable or disable debug logging (defaults to false) */
@@ -487,21 +490,21 @@ export declare function setDebug(enabled: boolean): void
 
 /** Audio source function types (for generator sources) */
 export declare const enum SourceFunction {
-  Sine = 0,
-  Square = 1,
-  Sawtooth = 2,
-  Triangle = 3,
-  WhiteNoise = 4,
-  PinkNoise = 5,
-  BrownNoise = 6
+  Sine = 'Sine',
+  Square = 'Square',
+  Sawtooth = 'Sawtooth',
+  Triangle = 'Triangle',
+  WhiteNoise = 'WhiteNoise',
+  PinkNoise = 'PinkNoise',
+  BrownNoise = 'BrownNoise'
 }
 
 /** Error types for stream operations */
 export declare const enum StreamError {
-  NotPlaying = 0,
-  EndOfFile = 1,
-  InvalidData = 2,
-  UnsupportedFormat = 3
+  NotPlaying = 'NotPlaying',
+  EndOfFile = 'EndOfFile',
+  InvalidData = 'InvalidData',
+  UnsupportedFormat = 'UnsupportedFormat'
 }
 
 /** Stream output configuration */
@@ -513,9 +516,9 @@ export interface StreamOutputConfig {
 
 /** Stream play error */
 export declare const enum StreamPlayError {
-  AlreadyPlaying = 0,
-  NotReady = 1,
-  SystemError = 2
+  AlreadyPlaying = 'AlreadyPlaying',
+  NotReady = 'NotReady',
+  SystemError = 'SystemError'
 }
 
 /** Get supported output configurations for the audio system */

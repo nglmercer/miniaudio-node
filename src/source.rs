@@ -83,7 +83,7 @@ impl AudioSource {
                 SourceType::WhiteNoise => {
                     use rand::Rng;
                     let mut rng = rand::thread_rng();
-                    rng.gen::<f64>() * 2.0 - 1.0
+                    // rng.gen::<f64>() * 2.0 - 1.0
                 }
                 _ => 0.0,
             };

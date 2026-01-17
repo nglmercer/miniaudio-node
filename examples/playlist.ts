@@ -9,7 +9,11 @@
  * 5. Handle playlist events
  */
 
-import { AudioPlayer, AudioPlayerConfig, getSupportedFormats } from "../../index.js";
+import {
+  AudioPlayer,
+  AudioPlayerConfig,
+  getSupportedFormats,
+} from "../index.js";
 import { existsSync, statSync } from "node:fs";
 
 interface PlaylistTrack {
@@ -26,7 +30,7 @@ class Playlist {
   private isPlaying: boolean = false;
   private isPaused: boolean = false;
   private volume: number = 1.0;
-  private loop: 'none' | 'all' | 'one' = 'none';
+  private loop: "none" | "all" | "one" = "none";
   private shuffle: boolean = false;
 
   constructor(config?: AudioPlayerConfig) {
@@ -80,7 +84,6 @@ class Playlist {
       this.tracks.push(track);
       console.log(`✅ Added: ${name} (${duration.toFixed(2)}s)`);
       return true;
-
     } catch (error) {
       console.error(`❌ Failed to add track:`, (error as Error).message);
       return false;
@@ -192,12 +195,11 @@ class Playlist {
       this.isPaused = false;
 
       // Set up auto-advance if needed
-      if (this.loop === 'one') {
+      if (this.loop === "one") {
         this.setupAutoAdvanceOne();
-      } else if (this.loop === 'all' || this.shuffle) {
+      } else if (this.loop === "all" || this.shuffle) {
         this.setupAutoAdvance();
       }
-
     } catch (error) {
       this.isPlaying = false;
       throw error;
@@ -252,7 +254,7 @@ class Playlist {
     } else {
       nextIndex = this.currentIndex + 1;
       if (nextIndex >= this.tracks.length) {
-        if (this.loop === 'all') {
+        if (this.loop === "all") {
           nextIndex = 0;
         } else {
           console.log("🏁 End of playlist");
@@ -272,7 +274,7 @@ class Playlist {
 
     let prevIndex = this.currentIndex - 1;
     if (prevIndex < 0) {
-      if (this.loop === 'all') {
+      if (this.loop === "all") {
         prevIndex = this.tracks.length - 1;
       } else {
         console.log("⏮️  Already at start");
@@ -286,7 +288,7 @@ class Playlist {
   /**
    * Set loop mode
    */
-  setLoop(mode: 'none' | 'all' | 'one'): void {
+  setLoop(mode: "none" | "all" | "one"): void {
     this.loop = mode;
     console.log(`🔁 Loop mode set to: ${mode}`);
   }
@@ -296,7 +298,7 @@ class Playlist {
    */
   setShuffle(enabled: boolean): void {
     this.shuffle = enabled;
-    console.log(`🔀 Shuffle ${enabled ? 'ON' : 'OFF'}`);
+    console.log(`🔀 Shuffle ${enabled ? "ON" : "OFF"}`);
   }
 
   /**
@@ -321,7 +323,11 @@ class Playlist {
   /**
    * Get current track position
    */
-  getPlaybackTime(): { current: number; total: number; percent: number } | null {
+  getPlaybackTime(): {
+    current: number;
+    total: number;
+    percent: number;
+  } | null {
     const track = this.getCurrentTrack();
     if (!track) return null;
 
@@ -379,13 +385,18 @@ class Playlist {
 
     this.tracks.forEach((track, index) => {
       const prefix = index === this.currentIndex ? "▶️  " : "    ";
-      const playerStatus = index === this.currentIndex && this.isPlaying ? "[Playing] " : "";
+      const playerStatus =
+        index === this.currentIndex && this.isPlaying ? "[Playing] " : "";
       const duration = track.duration.toFixed(2);
-      console.log(`${prefix}${index + 1}. ${playerStatus}${track.name} (${duration}s)`);
+      console.log(
+        `${prefix}${index + 1}. ${playerStatus}${track.name} (${duration}s)`,
+      );
     });
 
     console.log("=".repeat(60));
-    console.log(`Total: ${this.tracks.length} tracks, ${this.getTotalDuration().toFixed(2)}s`);
+    console.log(
+      `Total: ${this.tracks.length} tracks, ${this.getTotalDuration().toFixed(2)}s`,
+    );
   }
 
   /**
@@ -417,7 +428,9 @@ function getAudioFiles(directory: string): string[] {
   const fs = require("node:fs");
   const path = require("node:fs").path;
 
-  const supportedFormats = new Set(getSupportedFormats().map(f => f.toLowerCase()));
+  const supportedFormats = new Set(
+    getSupportedFormats().map((f) => f.toLowerCase()),
+  );
   const audioFiles: string[] = [];
 
   try {
@@ -457,7 +470,9 @@ async function demonstratePlaylist(): Promise<void> {
   if (audioFiles.length === 0) {
     console.log("\n⚠️  No audio files found for this platform.");
     console.log("   You can test by providing a directory path as argument:");
-    console.log("   bun ./examples/typescript/playlist.ts /path/to/audio/files");
+    console.log(
+      "   bun ./examples/typescript/playlist.ts /path/to/audio/files",
+    );
 
     // Check if directory provided as argument
     const directory = process.argv[2];
@@ -504,51 +519,51 @@ async function runPlaylistDemo(playlist: Playlist): Promise<void> {
     console.log("   Playing first track...");
 
     // Wait a bit, then show controls
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, 2000));
 
     // Control 1: Adjust volume
     console.log("\n🔉 Adjusting volume...");
     playlist.setVolume(0.5);
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    await new Promise((resolve) => setTimeout(resolve, 1500));
 
     // Control 2: Pause
     console.log("\n⏸️  Pausing playback...");
     playlist.pause();
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // Control 3: Resume
     console.log("\n▶️  Resuming playback...");
     playlist.resume();
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, 2000));
 
     // Control 4: Volume up
     console.log("\n🔊 Increasing volume...");
     playlist.setVolume(1.0);
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    await new Promise((resolve) => setTimeout(resolve, 1500));
 
     // Control 5: Next track (if available)
     if (playlist.getTracks().length > 1) {
       console.log("\n⏭️  Moving to next track...");
       await playlist.next();
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 2000));
     }
 
     // Control 6: Previous track
     if (playlist.getTracks().length > 1) {
       console.log("\n⏮️  Moving to previous track...");
       await playlist.previous();
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      await new Promise((resolve) => setTimeout(resolve, 1500));
     }
 
     // Control 7: Set shuffle
     console.log("\n🔀 Enabling shuffle...");
     playlist.setShuffle(true);
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
     // Control 8: Set loop mode
     console.log("\n🔁 Setting loop to 'all'...");
-    playlist.setLoop('all');
-    await new Promise(resolve => setTimeout(resolve, 500));
+    playlist.setLoop("all");
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
     // Control 9: Show status
     console.log("\n📊 Playlist Status:");
@@ -568,7 +583,6 @@ async function runPlaylistDemo(playlist: Playlist): Promise<void> {
     console.log("  ✓ Shuffle mode");
     console.log("  ✓ Loop modes");
     console.log("  ✓ Status and playlist display");
-
   } catch (error) {
     console.error("❌ Playlist demo error:", (error as Error).message);
   }
@@ -586,7 +600,7 @@ function getPlatformAudioFiles(): string[] {
     const sounds = [
       "C:/Windows/Media/tada.wav",
       "C:/Windows/Media/chimes.wav",
-      "C:/Windows/Media/notify.wav"
+      "C:/Windows/Media/notify.wav",
     ];
     for (const sound of sounds) {
       if (fs.existsSync(sound)) files.push(sound);
@@ -595,7 +609,7 @@ function getPlatformAudioFiles(): string[] {
     const sounds = [
       "/System/Library/Sounds/Glass.aiff",
       "/System/Library/Sounds/Guir.aiff",
-      "/System/Library/Sounds/Sosumi.aiff"
+      "/System/Library/Sounds/Sosumi.aiff",
     ];
     for (const sound of sounds) {
       if (fs.existsSync(sound)) files.push(sound);
@@ -604,7 +618,7 @@ function getPlatformAudioFiles(): string[] {
     const soundDirs = [
       "/usr/share/sounds/alsa",
       "/usr/share/sounds/gnome/default",
-      "/usr/share/sounds/ubuntu"
+      "/usr/share/sounds/ubuntu",
     ];
     for (const dir of soundDirs) {
       if (fs.existsSync(dir)) {

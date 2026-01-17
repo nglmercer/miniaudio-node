@@ -1,8 +1,6 @@
 use napi_derive::napi;
 use std::sync::atomic::AtomicBool;
 
-// ==================== TYPE ALIASES ====================
-
 /// Audio sample type (16-bit signed integer)
 pub type Sample = i16;
 
@@ -27,13 +25,14 @@ pub struct AudioDeviceInfo {
 }
 
 /// Audio player state enumeration
-#[napi]
+/// Audio player state enumeration
+#[napi(string_enum)]
 #[derive(Debug, PartialEq, Clone)]
 pub enum PlaybackState {
-    Stopped = 0,
-    Loaded = 1,
-    Playing = 2,
-    Paused = 3,
+    Stopped,
+    Loaded,
+    Playing,
+    Paused,
 }
 
 #[napi(object)]
@@ -51,72 +50,68 @@ pub struct AudioMetadata {
     pub album: Option<String>,
 }
 
-// ==================== ENUMS ====================
-
 /// Error types for device operations
-#[napi]
+#[napi(string_enum)]
 pub enum DevicesError {
-    NoDevicesFound = 0,
-    PermissionDenied = 1,
-    InvalidDevice = 2,
-    NotInitialized = 3,
+    NoDevicesFound,
+    PermissionDenied,
+    InvalidDevice,
+    NotInitialized,
 }
 
 /// Audio source function types (for generator sources)
-#[napi]
+#[napi(string_enum)]
 pub enum SourceFunction {
-    Sine = 0,
-    Square = 1,
-    Sawtooth = 2,
-    Triangle = 3,
-    WhiteNoise = 4,
-    PinkNoise = 5,
-    BrownNoise = 6,
+    Sine,
+    Square,
+    Sawtooth,
+    Triangle,
+    WhiteNoise,
+    PinkNoise,
+    BrownNoise,
 }
 
 /// Error types for stream operations
-#[napi]
+#[napi(string_enum)]
 pub enum StreamError {
-    NotPlaying = 0,
-    EndOfFile = 1,
-    InvalidData = 2,
-    UnsupportedFormat = 3,
+    NotPlaying,
+    EndOfFile,
+    InvalidData,
+    UnsupportedFormat,
 }
 
 /// Play error for stream operations
-#[napi]
+#[napi(string_enum)]
 pub enum PlayError {
-    AlreadyPlaying = 0,
-    NotLoaded = 1,
-    SystemError = 2,
+    AlreadyPlaying,
+    NotLoaded,
+    SystemError,
 }
 
 /// Seek error types
-#[napi]
+#[napi(string_enum)]
 pub enum SeekError {
-    InvalidPosition = 0,
-    NotSeekable = 1,
-    OutOfBounds = 2,
+    InvalidPosition,
+    NotSeekable,
+    OutOfBounds,
 }
 
 /// Decoder error types (for audio decoding operations)
-#[napi]
+#[napi(string_enum)]
 pub enum DecoderError {
-    InvalidFormat = 0,
-    CorruptedData = 1,
-    UnsupportedCodec = 2,
-    IoError = 3,
+    InvalidFormat,
+    CorruptedData,
+    UnsupportedCodec,
+    IoError,
 }
 
 /// Stream play error
-#[napi]
+#[napi(string_enum)]
 pub enum StreamPlayError {
-    AlreadyPlaying = 0,
-    NotReady = 1,
-    SystemError = 2,
+    AlreadyPlaying,
+    NotReady,
+    SystemError,
 }
-
-// ==================== STRUCTS ====================
 
 /// Supported stream configuration
 #[napi(object)]
@@ -133,8 +128,6 @@ pub struct StreamOutputConfig {
     pub channels: Option<ChannelCount>,
     pub buffer_size: Option<u32>,
 }
-
-// ==================== GLOBAL DEBUG ====================
 
 /// Global debug flag (defaults to false)
 pub static DEBUG_ENABLED: AtomicBool = AtomicBool::new(false);
