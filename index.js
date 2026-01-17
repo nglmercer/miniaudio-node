@@ -310,15 +310,15 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { PlaybackState, AudioPlayer, initializeAudio, getSupportedFormats, isFormatSupported, getAudioInfo, testTone, createAudioPlayer, quickPlay, getAudioMetadata } = nativeBinding
+const { AudioPlayer, createAudioPlayer, quickPlay, PlaybackState, initializeAudio, getSupportedFormats, isFormatSupported, getAudioInfo, testTone, getAudioMetadata } = nativeBinding
 
-module.exports.PlaybackState = PlaybackState
 module.exports.AudioPlayer = AudioPlayer
+module.exports.createAudioPlayer = createAudioPlayer
+module.exports.quickPlay = quickPlay
+module.exports.PlaybackState = PlaybackState
 module.exports.initializeAudio = initializeAudio
 module.exports.getSupportedFormats = getSupportedFormats
 module.exports.isFormatSupported = isFormatSupported
 module.exports.getAudioInfo = getAudioInfo
 module.exports.testTone = testTone
-module.exports.createAudioPlayer = createAudioPlayer
-module.exports.quickPlay = quickPlay
 module.exports.getAudioMetadata = getAudioMetadata

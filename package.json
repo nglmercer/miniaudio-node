@@ -31,7 +31,11 @@
     "build:debug": "napi build --platform",
     "build:watch": "napi build --platform --watch",
     "test": "bun test",
-    "clean": "napi clean && cargo clean"
+    "clean": "napi clean && cargo clean",
+    "examples:simple": "bun ./examples/simple-playback.ts",
+    "examples:buffer": "bun ./examples/buffer-loading.ts",
+    "examples:device": "bun ./examples/device-management.ts",
+    "examples:playlist": "bun ./examples/playlist.ts"
   },
   "main": "index.js",
   "types": "index.d.ts",
@@ -42,7 +46,9 @@
     "README.md"
   ],
   "devDependencies": {
-    "@napi-rs/cli": "^2.18.0"
+    "@napi-rs/cli": "^2.18.0",
+    "@types/bun": "^1.3.6",
+    "@types/node": "^25.0.9"
   },
   "napi": {
     "name": "miniaudio_node",
