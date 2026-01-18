@@ -103,12 +103,15 @@ jobs:
           # 1. Enable ARM64 architecture
           sudo dpkg --add-architecture arm64
 
-          # 2. Update APT sources to prevent 404 errors
-          # Restrict all existing sources (which are x64 only) to [arch=amd64]
+          # 2. Restrict the main Ubuntu mirrors to amd64 only
+          # (This prevents 404 errors when looking for arm64 packages on Azure mirrors)
           sudo sed -i 's/^deb/deb [arch=amd64]/' /etc/apt/sources.list
-          sudo sed -i 's/^deb/deb [arch=amd64]/' /etc/apt/sources.list.d/*.list
 
-          # 3. Add the specific repository for ARM64 packages
+          # 3. Remove third-party lists to prevent "Malformed entry" and 404 errors
+          # We don't need external tools (like Azure CLI) for this build step.
+          sudo rm -f /etc/apt/sources.list.d/*.list
+
+          # 4. Add the official Ubuntu Ports mirrors for ARM64
           cat <<EOF | sudo tee -a /etc/apt/sources.list
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
@@ -116,18 +119,13 @@ jobs:
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
           EOF
 
-          # 4. Update and Install Dependencies
+          # 5. Update and install the required ARM64 dependencies
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libasound2-dev:arm64
 
-          # 5. Configure Environment for Cross-Compilation
-          # Allow pkg-config to work cross-platform
+          # 6. Configure Environment for Cross-Compilation
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
-
-          # Point pkg-config to the ARM64 libraries we just installed
           echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
-
-          # Configure Rust to use the cross-compiler
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
