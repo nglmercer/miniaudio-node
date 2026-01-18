@@ -234,18 +234,6 @@ jobs:
           path: dist/
           retention-days: 7
 
-  # --- Build macOS ARM64 separately (requires host to be Apple Silicon) ---
-  build-macos-arm64:
-    name: Build macOS ARM64
-    runs-on: macos-latest # This needs to be an Apple Silicon runner (not available yet on free tier)
-    timeout-minutes: 45
-    # Skip this job - we need to wait for GitHub to provide macOS ARM64 runners
-    if: false
-    # Future: When macOS-arm64 runners are available:
-    # - os: macos-latest (arm64)
-    # - target: aarch64-apple-darwin
-    # - artifact: miniaudio_node.darwin-arm64.node
-
   test-summary:
     name: Test Summary
     needs: build-test
