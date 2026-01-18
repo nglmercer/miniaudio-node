@@ -41,25 +41,33 @@ jobs:
 
           # --- macOS ---
           # 1. Intel (x64) Build
-          # We run on macos-15 (Apple Silicon). Rust cross-compiles to x86_64.
-          # The tests run successfully using Rosetta 2 translation.
-          - os: macos-15
+          # FIX: Use macos-13 (Intel runner) to match the x86_64 architecture.
+          # This prevents the dlopen/npm error caused by loading x86 libs in ARM Node process.
+          - os: macos-13
             target: x86_64-apple-darwin
             artifact: miniaudio_node.darwin-x64.node
             run_tests: true
 
-          # 2. Apple Silicon (ARM64) Build - RECOMMENDED ADDITION
-          # This is the native build for modern Macs.
+          # 2. Apple Silicon (ARM64) Build
+          # Use macos-14 or 15 (Apple Silicon runner).
           - os: macos-15
             target: aarch64-apple-darwin
             artifact: miniaudio_node.darwin-arm64.node
             run_tests: true
 
           # --- Linux ---
+          # 1. x64 Linux
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: miniaudio_node.linux-x64-gnu.node
             run_tests: true
+
+          # 2. ARM64 Linux (IMPLEMENTED)
+          # We cannot run tests here because the runner is x64, and the binary is ARM64.
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: miniaudio_node.linux-arm64-gnu.node
+            run_tests: false
 
     steps:
       - name: Checkout code
@@ -81,11 +89,30 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
 
-      - name: Install system dependencies (Linux)
-        if: matrix.os == 'ubuntu-latest'
+      # --- Linux Dependencies (x64) ---
+      - name: Install system dependencies (Linux x64)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libpkgconf-dev
+
+      # --- Linux Dependencies (ARM64 Cross-compilation) ---
+      - name: Install system dependencies (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          # Install cross-compilers and the multiarch support for ALSA
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+          # Setup basic cross-compilation env vars for pkg-config (if needed by miniaudio/rodio)
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+
+          # Note: If miniaudio requires libasound2 during link time, standard apt install won't find the ARM version.
+          # However, miniaudio-node often statically links or loads dynamically.
+          # If the build fails on ALSA, we might need 'cross' or 'zigbuild',
+          # but usually the gcc-aarch64-linux-gnu wrapper is sufficient for NAPI.
 
       - name: Configure Git (Windows)
         if: matrix.os == 'windows-latest'
@@ -103,17 +130,6 @@ jobs:
           key: ${{ matrix.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ matrix.os }}-${{ matrix.target }}-cargo-
-
-      - name: Cache Bun dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            node_modules
-            .bun-cache
-            ~/.npm
-          key: ${{ matrix.os }}-${{ matrix.target }}-bun-${{ hashFiles('package.json', 'bun.lock') }}
-          restore-keys: |
-            ${{ matrix.os }}-${{ matrix.target }}-bun-
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
