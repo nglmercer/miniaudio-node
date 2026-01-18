@@ -29,9 +29,10 @@
   "scripts": {
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
-    "build:watch": "napi build --platform --watch",
+    "build:watch": "napi build --watch",
     "test": "bun test",
     "clean": "napi clean && cargo clean",
+    "copy:artifacts": "bun ./scripts/copy-artifacts.js",
     "examples:simple": "bun ./examples/simple-playback.ts",
     "examples:buffer": "bun ./examples/buffer-loading.ts",
     "examples:device": "bun ./examples/device-management.ts",
