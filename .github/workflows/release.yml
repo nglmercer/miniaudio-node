@@ -5,105 +5,199 @@ on:
     tags: ["v*"]
 
 env:
+  RUST_TOOLCHAIN: stable
   NODE_VERSION: "20"
-  NAPI_RS_LINK_TYPE: dynamic
   MACOSX_DEPLOYMENT_TARGET: "10.15"
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
+  build-release:
+    name: Build - ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
+          # --- Windows ---
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: miniaudio_node.win32-x64-msvc.node
+
           - os: windows-latest
             target: i686-pc-windows-msvc
             artifact: miniaudio_node.win32-ia32-msvc.node
-          - os: macos-latest
+
+          # --- macOS ---
+          # 1. Intel (x64)
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             artifact: miniaudio_node.darwin-x64.node
+
+          # 2. Apple Silicon (ARM64)
+          - os: macos-15
+            target: aarch64-apple-darwin
+            artifact: miniaudio_node.darwin-arm64.node
+
+          # --- Linux ---
+          # 1. x64 Linux
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: miniaudio_node.linux-x64-gnu.node
 
-    steps:
-      - uses: actions/checkout@v4
+          # 2. ARM64 Linux
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: miniaudio_node.linux-arm64-gnu.node
 
-      - uses: actions/setup-node@v4
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - uses: oven-sh/setup-bun@v1
-
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v1
         with:
-          toolchain: stable
+          bun-version: latest
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
 
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev libpkgconf-dev
-        if: matrix.os == 'ubuntu-latest'
+      # --- Linux Dependencies (x64) ---
+      - name: Install system dependencies (Linux x64)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libpkgconf-dev
 
-      - run: bun install --frozen-lockfile
-      - run: bunx napi build --platform --release --target ${{ matrix.target }}
+      # --- Linux Dependencies (ARM64 Cross-compilation) ---
+      - name: Install system dependencies (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo rm -f /etc/apt/sources.list.d/ubuntu.sources
+          sudo rm -f /etc/apt/sources.list.d/*.list
 
-      - run: |
-          mkdir -p artifacts
+          cat <<EOF | sudo tee /etc/apt/sources.list
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-backports main restricted universe multiverse
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-backports main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
+          EOF
+
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libasound2-dev:arm64
+
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+
+      - name: Configure Git (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          git config --global core.autocrlf input
+          git config --global core.eol lf
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build native module
+        shell: bash
+        run: |
+          echo "Building for target: ${{ matrix.target }}"
+          # Nota: En release NO corremos tests para ahorrar tiempo y evitar fallos por entorno
+          bunx napi build --platform --release --target ${{ matrix.target }}
+
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          mkdir -p dist/
+          # napi build genera el archivo .node. Lo renombramos al nombre esperado en matrix.artifact
+          # Buscamos cualquier archivo .node generado (generalmente index.node o miniaudio_node.node)
           NODE_FILE=$(find . -maxdepth 1 -name "*.node" -type f | head -n 1)
-          [ -n "$NODE_FILE" ] && cp "$NODE_FILE" "artifacts/${{ matrix.artifact }}" || exit 1
 
-      - uses: actions/upload-artifact@v4
+          if [ -f "$NODE_FILE" ]; then
+             echo "Found binary: $NODE_FILE"
+             cp "$NODE_FILE" "dist/${{ matrix.artifact }}"
+          else
+             echo "❌ Error: No .node file found after build"
+             exit 1
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: artifacts/
-          retention-days: 3
+          path: dist/${{ matrix.artifact }}
+          retention-days: 1
 
+  # JOB 2: PUBLISH (Github Release + NPM)
   release:
-    name: Release
-    needs: build
+    name: Publish Release
+    needs: build-release
     runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: write
+      id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           registry-url: "https://registry.npmjs.org"
 
-      - uses: oven-sh/setup-bun@v1
-
-      - run: bun install --frozen-lockfile
-
-      - uses: actions/download-artifact@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - run: |
+      - name: Prepare Package
+        run: |
           mkdir -p package
-          cp artifacts/*.node package/
-          cp package.json index.js index.d.ts package/
-          VERSION="${{ github.ref_name }}"; VERSION="${VERSION#v}"
-          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package/package.json'));p.version='$VERSION';fs.writeFileSync('package/package.json', JSON.stringify(p,null,2));"
 
-      - uses: softprops/action-gh-release@v1
+          cp package.json index.js index.d.ts README.md LICENSE package/ 2>/dev/null || true
+
+          echo "Flattening artifacts..."
+          find artifacts -name "*.node" -exec cp {} package/ \;
+
+          ls -l package/
+
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          echo "Setting version to $VERSION"
+          node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('package/package.json')); p.version='$VERSION'; fs.writeFileSync('package/package.json', JSON.stringify(p,null,2));"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          files: package/*
+          files: package/*.node
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
           generate_release_notes: true
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - run: |
-          npm install -g npm@latest
+      - name: Publish to NPM
+        run: |
           cd package
           npm publish --access public --provenance
         env:
