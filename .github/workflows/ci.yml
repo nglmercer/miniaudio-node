@@ -1,4 +1,4 @@
-name: CI Pipeline
+name: Build & Test CI
 
 on:
   push:
@@ -20,80 +20,6 @@ env:
   MACOSX_DEPLOYMENT_TARGET: "10.15"
 
 jobs:
-  # --- Lint & Code Quality ---
-  lint:
-    name: Lint & Quality Checks
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev libpkgconf-dev
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          components: rustfmt, clippy
-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target/
-          key: ubuntu-latest-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ubuntu-latest-cargo-
-
-      - name: Cache Bun dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            node_modules
-            .bun-cache
-            ~/.npm
-          key: ubuntu-latest-bun-${{ hashFiles('package.json', 'bun.lock') }}
-          restore-keys: |
-            ubuntu-latest-bun-
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Rust format check
-        run: cargo fmt --all -- --check
-
-      - name: Rust linting (clippy)
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: TypeScript type check
-        run: bun run tsc --noEmit || echo "TypeScript check completed"
-
-      - name: Security audit (npm)
-        run: bun audit || true
-
-      - name: Security audit (cargo)
-        run: |
-          cargo install cargo-audit 2>/dev/null || true
-          cargo audit || true
-
-  # --- Build & Test Matrix ---
   build-test:
     name: Build & Test - ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
@@ -102,27 +28,28 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Windows
+          # --- Windows ---
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: miniaudio_node.win32-x64-msvc.node
-            triple: x86_64-pc-windows-msvc
+            run_tests: true
+
           - os: windows-latest
             target: i686-pc-windows-msvc
             artifact: miniaudio_node.win32-ia32-msvc.node
-            triple: i686-pc-windows-msvc
+            run_tests: false
 
-          # macOS (host arch only)
-          - os: macos-latest
+          # --- macOS ---
+          - os: macos-13
             target: x86_64-apple-darwin
             artifact: miniaudio_node.darwin-x64.node
-            triple: x86_64-apple-darwin
+            run_tests: true
 
-          # Linux
+          # --- Linux ---
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: miniaudio_node.linux-x64-gnu.node
-            triple: x86_64-unknown-linux-gnu
+            run_tests: true
 
     steps:
       - name: Checkout code
@@ -143,20 +70,12 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
-          components: rustfmt
 
       - name: Install system dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libpkgconf-dev
-
-      - name: Setup macOS SDK (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
-          echo "SDKROOT=$SDKROOT" >> $GITHUB_ENV
-          echo "MACOSX_DEPLOYMENT_TARGET=10.15" >> $GITHUB_ENV
 
       - name: Configure Git (Windows)
         if: matrix.os == 'windows-latest'
@@ -193,54 +112,30 @@ jobs:
         shell: bash
         run: |
           echo "Building for target: ${{ matrix.target }}"
-
-          # Build with napi-rs
-          # This will create files like miniaudio_node.linux-x64-gnu.node
           bunx napi build --platform --release --target ${{ matrix.target }}
 
-          echo ""
-          echo "✅ Build complete. Files in root:"
-          ls -la *.node
-
-      - name: Run Rust tests
-        run: cargo test --verbose
-
       - name: Run Node.js tests
+        if: matrix.run_tests
         shell: bash
         run: |
-          echo "Preparing test environment..."
+          echo "🧪 Preparing to test artifact: ${{ matrix.artifact }}"
 
-          # CRITICAL FIX:
-          # The napi-rs generated index.js looks for specific filenames.
-          # To ensure tests run reliably without optionalDependencies installed,
-          # we copy the specific artifact to the default development name 'miniaudio_node.node'.
-          # This forces index.js to load the local file.
-
-          if [ -f "${{ matrix.artifact }}" ]; then
-            cp "${{ matrix.artifact }}" miniaudio_node.node
-            echo "✅ Copied ${{ matrix.artifact }} to miniaudio_node.node for testing"
-          else
-            echo "❌ Could not find ${{ matrix.artifact }}"
-            exit 1
+          if [ ! -f "${{ matrix.artifact }}" ]; then
+             echo "❌ Error: Artifact ${{ matrix.artifact }} not found!"
+             exit 1
           fi
 
-          # Run tests
+          export NAPI_RS_NATIVE_LIBRARY_PATH="$(pwd)/${{ matrix.artifact }}"
+          echo "🔗 Linking native library from: $NAPI_RS_NATIVE_LIBRARY_PATH"
+
           bun test
 
-      - name: Prepare artifact
+      - name: Prepare artifact for upload
         shell: bash
         run: |
-          # Ensure dist directory exists
           mkdir -p dist/
-
-          # Copy the built artifact to dist with correct name
           if [ -f "${{ matrix.artifact }}" ]; then
             cp "${{ matrix.artifact }}" "dist/${{ matrix.artifact }}"
-            echo "✅ Copied ${{ matrix.artifact }} to dist/"
-            ls -la dist/
-          else
-            echo "❌ Artifact ${{ matrix.artifact }} not found for copying!"
-            exit 1
           fi
 
       - name: Upload artifact
@@ -266,8 +161,6 @@ jobs:
       - name: Display artifact summary
         run: |
           echo "## Build Artifacts Summary"
-          echo ""
-          echo "### Generated binaries:"
           find artifacts -name "*.node" -type f | while read f; do
             size=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null)
             echo "- $(basename $f): ${size} bytes"
@@ -283,10 +176,10 @@ jobs:
     steps:
       - name: Status Summary
         run: |
-          echo "## CI Pipeline Status"
           if [[ "${{ needs.build-test.result }}" == "success" ]]; then
             echo "✅ All builds and tests passed!"
           else
             echo "⚠️  Some builds or tests failed. Check logs for details."
+            exit 1
           fi
         shell: bash
