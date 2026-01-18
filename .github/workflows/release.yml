@@ -1,38 +1,58 @@
-name: Build and Release
+name: Production Release
 
 on:
   push:
     tags: ["v*"]
 
 env:
+  RUST_TOOLCHAIN: stable
+  NODE_VERSION: "20"
   NAPI_RS_LINK_TYPE: dynamic
+  MACOSX_DEPLOYMENT_TARGET: "10.15"
 
 jobs:
   build:
-    name: Build ${{ matrix.target }}
+    name: Build for Release
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
+      fail-fast: false
       matrix:
         include:
+          # Windows
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: miniaudio_node.win32-x64-msvc.node
+
+          - os: windows-latest
+            target: i686-pc-windows-msvc
+            artifact: miniaudio_node.win32-ia32-msvc.node
+
+          # macOS
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: miniaudio_node.darwin-x64.node
+
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: miniaudio_node.darwin-arm64.node
+
+          # Linux
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: miniaudio_node.linux-x64-gnu.node
-          # Temporarily disabled due to rodio linking issues with NAPI on arm64
-          # - os: ubuntu-latest
-          #   target: aarch64-unknown-linux-gnu
-          #   artifact: miniaudio_node.linux-arm64-gnu.node
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          line-ending: lf
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: "https://registry.npmjs.org"
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v1
@@ -42,8 +62,27 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
+
+      - name: Install system dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libpkgconf-dev
+
+      - name: Setup macOS SDK (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
+          echo "SDKROOT=$SDKROOT" >> $GITHUB_ENV
+          echo "MACOSX_DEPLOYMENT_TARGET=10.15" >> $GITHUB_ENV
+
+      - name: Configure Git (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          git config --global core.autocrlf input
+          git config --global core.eol lf
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -56,19 +95,6 @@ jobs:
           restore-keys: |
             ${{ matrix.os }}-${{ matrix.target }}-cargo-
 
-      - name: Install system dependencies (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev libpkgconf-dev
-
-      - name: Setup macOS SDK environment
-        if: matrix.os == 'macos-latest'
-        run: |
-          SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
-          echo "SDKROOT=$SDKROOT" >> $GITHUB_ENV
-          echo "MACOSX_DEPLOYMENT_TARGET=10.15" >> $GITHUB_ENV
-
       - name: Cache Bun dependencies
         uses: actions/cache@v4
         with:
@@ -76,78 +102,69 @@ jobs:
             node_modules
             .bun-cache
             ~/.npm
-          key: ${{ matrix.os }}-${{ matrix.target }}-deps-${{ hashFiles('package.json', 'bun.lock') }}
+          key: ${{ matrix.os }}-${{ matrix.target }}-bun-${{ hashFiles('package.json', 'bun.lock') }}
           restore-keys: |
-            ${{ matrix.os }}-${{ matrix.target }}-deps-
+            ${{ matrix.os }}-${{ matrix.target }}-bun-
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
-        # NAPI_RS_LINK_TYPE is set globally above
 
-      # - name: Setup Zig (Linux ARM64)
-      #   if: matrix.target == 'aarch64-unknown-linux-gnu'
-      #   run: |
-      #     curl -L https://ziglang.org/download/0.11.0/zig-linux-x86_64-0.11.0.tar.xz | tar -xJ
-      #     sudo mv zig-linux-x86_64-0.11.0/zig /usr/local/bin/
-      #     sudo chmod +x /usr/local/bin/zig
-
-      # - name: Setup cross-compilation environment (ARM64 Linux)
-      #   if: matrix.target == 'aarch64-unknown-linux-gnu'
-      #   run: |
-      #     echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-      #     echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
-      #     echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
-      #     # Disable ALSA pkg-config to avoid cross-complication issues
-      #     echo "ALSA_NO_PKG_CONFIG=1" >> $GITHUB_ENV
-
-      - name: Build native module
+      - name: Build native binary
         run: bunx napi build --platform --release --target ${{ matrix.target }}
         shell: bash
 
       - name: Prepare artifact for upload
+        id: prepare-artifact
         run: |
-          # Create dist directory
-          mkdir -p dist
+          mkdir -p artifacts
 
-          # Find the generated .node file
-          NODE_FILE=$(find . -maxdepth 1 -name "*.node" -type f | head -n 1)
+          # Find generated .node file
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            NODE_FILE=$(find . -maxdepth 1 -name "*.node" -type f -exec readlink -f {} \; | head -n 1)
+          else
+            NODE_FILE=$(find . -maxdepth 1 -name "*.node" -type f | head -n 1)
+          fi
 
           if [ -n "$NODE_FILE" ]; then
-            # Copy the file to dist/ with the expected artifact name
-            cp "$NODE_FILE" "dist/${{ matrix.artifact }}"
-            echo "✅ Artifact found and copied to dist/${{ matrix.artifact }}"
+            cp "$NODE_FILE" "artifacts/${{ matrix.artifact }}"
+            echo "✅ Artifact found: $NODE_FILE"
           else
-            echo "❌ No .node file found after build"
-            ls -la
+            echo "❌ No .node file found"
+            ls -la *.node 2>/dev/null || echo "No .node files in root"
             find . -name "*.node" -o -name "*.dylib" 2>/dev/null || true
             exit 1
           fi
 
-          ls -la dist/
+          ls -la artifacts/
         shell: bash
 
-      - name: Upload artifact
+      - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: dist/
-          retention-days: 1
+          name: binary-${{ matrix.target }}
+          path: artifacts/
+          retention-days: 3
 
-  release:
-    name: Create GitHub Release
+  create_release:
+    name: Create GitHub Release & Publish to npm
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
       id-token: write
-    steps:
-      - uses: actions/checkout@v4
+      packages: write
 
-      - name: Install Node.js
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: ${{ env.NODE_VERSION }}
           registry-url: "https://registry.npmjs.org"
+
       - name: Install Bun
         uses: oven-sh/setup-bun@v1
         with:
@@ -156,61 +173,78 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Download all artifacts
+      - name: Download all binary artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Organize release files
+      - name: Prepare release directory
         run: |
           mkdir -p release
-          echo "Current directory: $(pwd)"
-          echo "Contents of artifacts directory:"
-          ls -R artifacts/ || echo "artifacts directory not found"
 
-          # Find and copy all .node files from their artifact directories
-          echo "Copying .node files to release folder..."
-          find artifacts -name "*.node" -type f -exec cp -v {} release/ \;
+          echo "📦 Collecting build artifacts..."
 
-          # Verify files were copied
-          echo "Contents of release directory:"
-          ls -la release/
-
-          # Check for expected files (dynamic check based on matrix artifacts)
-          EXPECTED_FILES="miniaudio_node.darwin-x64.node miniaudio_node.linux-x64-gnu.node miniaudio_node.darwin-arm64.node miniaudio_node.win32-x64-msvc.node"
-          for file in $EXPECTED_FILES; do
-            if [ -f "release/$file" ]; then
-              echo "✅ Found $file"
-            else
-              echo "❌ Missing $file"
-              # Don't exit yet, let the diagnostic info show
-            fi
+          # Find all .node files and copy to release directory
+          find artifacts -name "*.node" -type f | while read f; do
+            cp -v "$f" release/
           done
 
-          # Fail if no .node files were found
-          if [ $(ls release/*.node 2>/dev/null | wc -l) -eq 0 ]; then
-            echo "FATAL: No .node files found in release directory!"
-            exit 1
-          fi
-
-      - name: Prepare package for distribution
-        run: |
-          # Get version from tag (e.g., v1.0.2 -> 1.0.2)
-          VERSION=$(echo ${{ github.ref_name }} | sed 's/^v//')
-          echo "Releasing version: $VERSION"
-
-          # Update version in package.json using a more robust sed pattern
-          # This replaces "version": "ANYTHING" with "version": "VERSION"
-          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" package.json
-
-          # Copy essential files for release
+          # Copy essential package files
           cp package.json release/
           cp index.js release/
           cp index.d.ts release/
           cp README.md release/ || echo "Warning: README.md not found"
 
-          echo "Final release package structure:"
+          # Update version in release package.json from tag
+          VERSION=$(echo ${{ github.ref_name }} | sed 's/^v//')
+          echo "Updating version to: $VERSION"
+
+          # Use node to update version safely
+          cat << EOF | bun run -
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('release/package.json', 'utf8'));
+          pkg.version = '$VERSION';
+          fs.writeFileSync('release/package.json', JSON.stringify(pkg, null, 2) + '\n');
+          EOF
+
+          echo "✅ Release directory prepared"
+          echo ""
+          echo "📁 Release contents:"
           ls -la release/
+          echo ""
+          echo "📦 Binaries:"
+          ls -la release/*.node
+
+      - name: Verify all expected binaries
+        run: |
+          cd release
+
+          # Check for expected files
+          EXPECTED_FILES=(
+            "miniaudio_node.win32-x64-msvc.node"
+            "miniaudio_node.win32-ia32-msvc.node"
+            "miniaudio_node.darwin-x64.node"
+            "miniaudio_node.darwin-arm64.node"
+            "miniaudio_node.linux-x64-gnu.node"
+          )
+
+          MISSING=0
+          for file in "${EXPECTED_FILES[@]}"; do
+            if [ -f "$file" ]; then
+              size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null)
+              echo "✅ $file: $(($size / 1024)) KB"
+            else
+              echo "❌ $file: MISSING"
+              MISSING=$((MISSING + 1))
+            fi
+          done
+
+          if [ $MISSING -eq 0 ]; then
+            echo "✅ All binaries present!"
+          else
+            echo "⚠️  $MISSING binaries missing"
+            exit 1
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
@@ -220,25 +254,68 @@ jobs:
             release/package.json
             release/index.js
             release/index.d.ts
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
           draft: false
           prerelease: false
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish to npm
+      - name: Push to npm with Trusted Publishing
         run: |
-          # Opcional: Node 20 ya trae npm v10+, pero asegurar latest está bien
+          # Install npm latest (Node 20 has v10+, but ensure latest for --provenance)
           npm install -g npm@latest
 
           cd release
 
-          # Publicamos. npm usará el OIDC token automáticamente gracias a --provenance
+          # Publish with provenance (requires Node.js 20+ and npm 10+)
           npm publish --access public --provenance
         env:
-          # Con Trusted Publishing y setup-node configurado,
-          # NODE_AUTH_TOKEN suele ser manejado internamente o se usa el OIDC directo.
-          # Si npm te sigue pidiendo auth, define esto apuntando a una variable vacía o dummy
-          # para satisfacer la validación inicial de setup-node, pero OIDC hará el resto.
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NAPI_RS_LINK_TYPE: dynamic
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        continue-on-error: false
+
+      - name: Create release summary
+        if: always()
+        run: |
+          echo "## Release Summary: ${{ github.ref_name }}"
+          echo ""
+          echo "### Artifacts included:"
+          ls -1 release/*.node | sed 's/^release\///' | sed 's/^/- /'
+          echo ""
+          echo "### npm package:"
+          echo "- Status: ${{ job.status }}"
+          echo "- Target: https://www.npmjs.com/package/miniaudio_node"
+          echo ""
+          if [[ "${{ job.status }}" == "success" ]]; then
+            echo "✅ Release completed successfully!"
+          else
+            echo "❌ Release failed. Check logs for details."
+            exit 1
+          fi
+
+  notify:
+    name: Post-Release Notification
+    needs: [build, create_release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+
+    steps:
+      - name: Final Status
+        run: |
+          echo "## 🎉 Release Complete"
+          echo ""
+          echo "**Package:** miniaudio_node"
+          echo "**Version:** ${{ github.ref_name }}"
+          echo ""
+          echo "### Pipeline Status"
+          echo "- Build: ${{ needs.build.result }}"
+          echo "- Release: ${{ needs.create_release.result }}"
+          echo ""
+          if [[ "${{ needs.build.result }}" == "success" && "${{ needs.create_release.result }}" == "success" ]]; then
+            echo "✅ All jobs succeeded! Check npm for the new version."
+          else
+            echo "⚠️  Some jobs failed. Review logs for details."
+          fi
+        shell: bash
