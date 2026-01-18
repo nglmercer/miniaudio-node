@@ -192,8 +192,18 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build native module
-        run: bunx napi build --platform --release --target ${{ matrix.target }}
-        shell: bash
+        run: |
+          echo "Building for target: ${{ matrix.target }}"
+          bunx napi build --platform --release --target ${{ matrix.target }}
+
+          echo "Build complete. Listing files in current directory:"
+          ls -la *.node 2>/dev/null || echo "No .node files found in current directory"
+
+          echo "Checking for native module in out directory:"
+          ls -la out/ 2>/dev/null || echo "No out/ directory"
+
+          echo "Looking for any .node files recursively:"
+          find . -name "*.node" -type f 2>/dev/null || echo "No .node files found recursively"
 
       - name: Run Rust tests
         run: cargo test --verbose
@@ -207,25 +217,78 @@ jobs:
         run: bun test
         shell: powershell
 
-      - name: Prepare artifact
+      - name: Prepare artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          mkdir -p dist
+
+          # Find .node file on Windows
+          NODE_FILE=$(find . -maxdepth 1 -name "*.node" -type f -exec readlink -f {} \; | head -n 1)
+
+          echo "Looking for .node file..."
+          echo "Found: $NODE_FILE"
+          ls -la *.node 2>/dev/null || echo "No .node files in current dir"
+
+          # Fallback: look in out/ directory
+          if [ -z "$NODE_FILE" ]; then
+            echo "Trying out/ directory..."
+            NODE_FILE=$(find out/ -name "*.node" -type f 2>/dev/null | head -n 1 || echo "")
+          fi
+
+          # Fallback: look recursively for the specific pattern
+          if [ -z "$NODE_FILE" ]; then
+            echo "Searching recursively..."
+            NODE_FILE=$(find . -name "miniaudio_node*.node" -type f 2>/dev/null | head -n 1 || echo "")
+          fi
+
+          if [ -n "$NODE_FILE" ]; then
+            echo "Copying $NODE_FILE to dist/${{ matrix.artifact }}"
+            cp "$NODE_FILE" "dist/${{ matrix.artifact }}"
+            echo "✅ Built ${{ matrix.artifact }}"
+            ls -la dist/
+          else
+            echo "❌ No .node file found"
+            echo "Full file listing:"
+            ls -laR .
+            exit 1
+          fi
+        shell: bash
+
+      - name: Prepare artifact (Unix)
+        if: matrix.os != 'windows-latest'
         run: |
           mkdir -p dist
 
           # Find .node file
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            NODE_FILE=$(find . -maxdepth 1 -name "*.node" -type f -exec readlink -f {} \; | head -n 1)
-          else
-            NODE_FILE=$(find . -maxdepth 1 -name "*.node" -type f | head -n 1)
+          echo "Looking for .node file..."
+          NODE_FILE=$(find . -maxdepth 1 -name "*.node" -type f | head -n 1)
+          echo "Found: $NODE_FILE"
+          ls -la *.node 2>/dev/null || echo "No .node files in current dir"
+
+          # Fallback: look in out/ directory
+          if [ -z "$NODE_FILE" ]; then
+            echo "Trying out/ directory..."
+            NODE_FILE=$(find out/ -name "*.node" -type f 2>/dev/null | head -n 1 || echo "")
+          fi
+
+          # Fallback: look recursively for the specific pattern
+          if [ -z "$NODE_FILE" ]; then
+            echo "Searching recursively..."
+            NODE_FILE=$(find . -name "miniaudio_node*.node" -type f 2>/dev/null | head -n 1 || echo "")
           fi
 
           if [ -n "$NODE_FILE" ]; then
+            echo "Copying $NODE_FILE to dist/${{ matrix.artifact }}"
             cp "$NODE_FILE" "dist/${{ matrix.artifact }}"
             echo "✅ Built ${{ matrix.artifact }}"
+            ls -la dist/
           else
             echo "❌ No .node file found"
-            ls -la *.node 2>/dev/null || echo "No .node files"
+            echo "Full file listing:"
+            ls -laR .
             exit 1
           fi
+        shell: bash
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
