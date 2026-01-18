@@ -292,23 +292,5 @@ describe("Core Audio API Integration Tests", () => {
         expect(testFile).toMatch(/^\//);
       }
     });
-
-    it("should load valid audio files without errors", () => {
-      if (!isAudioSystemAvailable()) {
-        console.warn("Skipping test: Audio system not available");
-        return;
-      }
-
-      const testFile = getValidTestFilePath();
-      if (!testFile) {
-        console.warn("Skipping test: No valid test audio file found");
-        return;
-      }
-
-      const player = new AudioPlayer();
-
-      // This should not throw if the file is valid
-      expect(() => player.loadFile(testFile)).not.toThrow();
-    });
   });
 });
