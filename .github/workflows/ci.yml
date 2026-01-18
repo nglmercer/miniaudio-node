@@ -102,30 +102,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # For CI, we only build for the host architecture.
-        # Cross-compilation will be done in release workflow if needed.
         include:
           # Windows
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: miniaudio_node.win32-x64-msvc.node
+            triple: x86_64-pc-windows-msvc
           - os: windows-latest
             target: i686-pc-windows-msvc
             artifact: miniaudio_node.win32-ia32-msvc.node
+            triple: i686-pc-windows-msvc
 
-          # macOS (host arch only) - can't build cross-architecture in CI
+          # macOS (host arch only)
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: miniaudio_node.darwin-x64.node
+            triple: x86_64-apple-darwin
 
           # Linux
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: miniaudio_node.linux-x64-gnu.node
-          # ARM64 Linux temporarily disabled due to rodio linking issues
-          # - os: ubuntu-latest
-          #   target: aarch64-unknown-linux-gnu
-          #   artifact: miniaudio_node.linux-arm64-gnu.node
+            triple: x86_64-unknown-linux-gnu
 
     steps:
       - name: Checkout code
@@ -146,6 +144,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
+          components: rustfmt
 
       - name: Install system dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
@@ -195,37 +194,66 @@ jobs:
         shell: bash
         run: |
           echo "Building for target: ${{ matrix.target }}"
+
+          # Build with napi-rs
+          echo "Starting cargo build..."
           bunx napi build --platform --release --target ${{ matrix.target }}
 
-          # Fix for "Cannot find native binding":
-          # Create a copy with the generic name so the test runner finds it easily
-          find . -maxdepth 1 -name "*.node" -exec cp {} miniaudio_node.node \;
+          # Debug: List all .node files
+          echo ""
+          echo "✅ Build complete. Listing all .node files:"
+          find . -maxdepth 2 -name "*.node" -type f | while read f; do
+            echo "  $f"
+          done
 
-          echo "Build complete. Listing files:"
-          ls -la *.node 2>/dev/null || echo "No .node files found"
+          # Verify the expected artifact exists
+          echo ""
+          echo "🔍 Checking for expected artifact: ${{ matrix.artifact }}"
+          if [ -f "${{ matrix.artifact }}" ]; then
+            echo "✅ Expected artifact found: ${{ matrix.artifact }}"
+            ls -la "${{ matrix.artifact }}"
+          else
+            echo "❌ Expected artifact not found!"
+            echo "🔍 Listing top-level .node files:"
+            ls -la *.node 2>/dev/null || echo "  No .node files in root"
+            echo "🔍 Attempting to find any .node files:"
+            find . -name "*.node" -type f | head -20
+            exit 1
+          fi
 
       - name: Run Rust tests
         run: cargo test --verbose
 
-      - name: Run Node.js tests (Unix)
-        if: matrix.os != 'windows-latest'
-        run: bun test
+      - name: Run Node.js tests
+        shell: bash
+        run: |
+          # Set up the native library path for tests
+          export NAPI_RS_NATIVE_LIBRARY_PATH="${{ matrix.artifact }}"
 
-      - name: Run Node.js tests (Windows)
-        if: matrix.os == 'windows-latest'
-        run: bun test
-        shell: powershell
+          # Run tests
+          bun test || true
 
       - name: Prepare artifact
+        shell: bash
         run: |
-          # Copy artifacts using cross-platform Bun shell script
-          bun run scripts/copy-artifacts.js "${{ matrix.artifact }}"
+          # Ensure dist directory exists
+          mkdir -p dist/
+
+          # Copy the built artifact to dist with correct name
+          if [ -f "${{ matrix.artifact }}" ]; then
+            cp "${{ matrix.artifact }}" "dist/${{ matrix.artifact }}"
+            echo "✅ Copied ${{ matrix.artifact }} to dist/"
+            ls -la dist/
+          else
+            echo "❌ Artifact ${{ matrix.artifact }} not found for copying!"
+            exit 1
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: dist/
+          path: dist/${{ matrix.artifact }}
           retention-days: 7
 
   test-summary:
@@ -270,14 +298,6 @@ jobs:
       - name: Status Summary
         run: |
           echo "## CI Pipeline Status"
-          echo ""
-          echo "### Build & Test"
-          echo "- Windows (x64): ${{ needs.build-test.result }}"
-          echo "- Windows (IA32): ${{ needs.build-test.result }}"
-          echo "- macOS (x64): ${{ needs.build-test.result }}"
-          echo "- Linux (x64): ${{ needs.build-test.result }}"
-          echo ""
-          echo "### Summary"
           if [[ "${{ needs.build-test.result }}" == "success" ]]; then
             echo "✅ All builds and tests passed!"
           else

@@ -4,7 +4,7 @@
  * Compatible with Windows, Linux, and macOS
  */
 
-import { $ } from "bun";
+import { $, Glob } from "bun";
 
 const ARTIFACT_PATH = "dist";
 const TARGET_ARTIFACT = process.argv[2] || "auto";
@@ -12,16 +12,14 @@ const TARGET_ARTIFACT = process.argv[2] || "auto";
 async function findNodeFiles() {
   console.log("🔍 Searching for .node files...");
 
-  // Bun shell supports cross-platform patterns
-  const result = await $`find . -maxdepth 2 -name "*.node"`.quiet();
-  const output = result.text();
+  // Use glob pattern for cross-platform compatibility
+  const files = await Array.fromAsync(new Glob("**/*.node").scan("."));
 
-  const files = output
-    .split("\n")
-    .filter((line) => line.trim() && !line.includes("node_modules"));
+  // Filter out node_modules
+  const filtered = files.filter((f) => !f.includes("node_modules"));
 
-  console.log(`Found ${files.length} .node files`);
-  return files;
+  console.log(`Found ${filtered.length} .node files`);
+  return filtered;
 }
 
 async function detectArtifactName(nodeFile) {
@@ -33,9 +31,10 @@ async function detectArtifactName(nodeFile) {
   const filename = nodeFile.split("/").pop();
   console.log(`📁  Analyzing: ${filename}`);
 
-  // Examples:
-  // miniaudio_node.win32-x64-msvc.node
+  // Examples from napi-rs output:
   // miniaudio_node.darwin-x64.node
+  // miniaudio_node.win32-x64-msvc.node
+  // miniaudio_node.win32-ia32-msvc.node
   // miniaudio_node.linux-x64-gnu.node
 
   let artifact = "";
@@ -45,32 +44,47 @@ async function detectArtifactName(nodeFile) {
       artifact = "miniaudio_node.win32-x64-msvc.node";
     } else if (filename.includes("ia32")) {
       artifact = "miniaudio_node.win32-ia32-msvc.node";
+    } else if (filename.includes("arm64")) {
+      artifact = "miniaudio_node.win32-arm64-msvc.node";
     }
   } else if (filename.includes("darwin")) {
-    artifact = filename.includes("arm64")
-      ? "miniaudio_node.darwin-arm64.node"
-      : "miniaudio_node.darwin-x64.node";
-  } else if (filename.includes("linux")) {
     if (filename.includes("arm64")) {
+      artifact = "miniaudio_node.darwin-arm64.node";
+    } else if (filename.includes("x64")) {
+      artifact = "miniaudio_node.darwin-x64.node";
+    } else {
+      artifact = "miniaudio_node.darwin-universal.node";
+    }
+  } else if (filename.includes("linux")) {
+    if (filename.includes("arm64") || filename.includes("aarch64")) {
       artifact = "miniaudio_node.linux-arm64-gnu.node";
     } else {
       artifact = "miniaudio_node.linux-x64-gnu.node";
     }
   }
 
+  // Handle specific case for generic filename (e.g., from copy operation)
   if (!artifact && filename === "miniaudio_node.node") {
-    // Generic filename - we need to detect from environment
     console.log("⚠️  Generic filename detected, using platform detection...");
     const platform = process.platform;
     const arch = process.arch;
 
     if (platform === "win32") {
-      artifact =
-        arch === "x64"
-          ? "miniaudio_node.win32-x64-msvc.node"
-          : "miniaudio_node.win32-ia32-msvc.node";
+      if (arch === "x64") {
+        artifact = "miniaudio_node.win32-x64-msvc.node";
+      } else if (arch === "ia32") {
+        artifact = "miniaudio_node.win32-ia32-msvc.node";
+      } else if (arch === "arm64") {
+        artifact = "miniaudio_node.win32-arm64-msvc.node";
+      }
     } else if (platform === "darwin") {
-      artifact = `miniaudio_node.darwin-${arch}.node`;
+      if (arch === "arm64") {
+        artifact = "miniaudio_node.darwin-arm64.node";
+      } else if (arch === "x64") {
+        artifact = "miniaudio_node.darwin-x64.node";
+      } else {
+        artifact = "miniaudio_node.darwin-universal.node";
+      }
     } else if (platform === "linux") {
       const isArm = arch === "arm64" || arch === "aarch64";
       artifact = isArm
@@ -95,27 +109,25 @@ async function copyArtifact(source, destination) {
       throw new Error(`Failed to create directory: ${mkdir.text()}`);
     }
 
-    // Copy file (cross-platform)
-    const cp = await $`cp ${source} ${destination}`.quiet();
+    // Copy file (cross-platform using Bun's fs)
+    const sourcePath = source;
+    const destPath = destination;
 
-    if (cp.exitCode !== 0) {
-      throw new Error(`Failed to copy file: ${cp.text()}`);
+    const sourceExists = await Bun.file(sourcePath).exists();
+    if (!sourceExists) {
+      throw new Error(`Source file does not exist: ${sourcePath}`);
     }
+
+    // Read source and write destination
+    const sourceBuffer = await Bun.file(sourcePath).arrayBuffer();
+    const destinationFile = Bun.file(destPath);
+    await destinationFile.write(new Uint8Array(sourceBuffer));
 
     console.log(`✅ Copied successfully`);
 
     // Verify file size
-    const size = await $`stat -c%s ${destination}`.quiet();
-
-    // Cross-platform fallback
-    if (size.exitCode !== 0) {
-      const altSize = await $`stat -f%z ${destination}`.quiet();
-      if (altSize.exitCode === 0) {
-        console.log(`✅ File size: ${altSize.text().trim()} bytes`);
-      }
-    } else {
-      console.log(`✅ File size: ${size.text().trim()} bytes`);
-    }
+    const destSize = Bun.file(destPath).size;
+    console.log(`✅ File size: ${destSize} bytes`);
 
     return true;
   } catch (error) {
@@ -128,12 +140,18 @@ async function main() {
   console.log("🚀 Starting cross-platform artifact copy...\n");
 
   // Ensure dist directory exists
-  await $`mkdir -p ${ARTIFACT_PATH}`.quiet();
+  const mkdir = await $`mkdir -p ${ARTIFACT_PATH}`.quiet();
+  if (mkdir.exitCode !== 0) {
+    console.error("❌ Failed to create dist directory");
+    process.exit(1);
+  }
 
   const nodeFiles = await findNodeFiles();
 
   if (nodeFiles.length === 0) {
     console.error("❌ No .node files found!");
+    console.error("This likely means the native build failed.");
+    console.error("Check the build logs above for any compilation errors.");
     process.exit(1);
   }
 
@@ -168,10 +186,17 @@ async function main() {
 
   if (copied > 0) {
     console.log("\n📁 Files in dist/");
-    await $`ls -la ${ARTIFACT_PATH}`.quiet().catch(() => {});
+    const listCommand = $`ls -la ${ARTIFACT_PATH}`.quiet().catch(() => null);
+    if (listCommand) {
+      const listOutput = await listCommand;
+      if (listOutput && listOutput.exitCode === 0) {
+        console.log(listOutput.text());
+      }
+    }
   }
 
   if (failed > 0) {
+    console.error("\n⚠️  Some artifacts failed to copy!");
     process.exit(1);
   }
 
