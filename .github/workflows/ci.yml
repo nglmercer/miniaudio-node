@@ -1,4 +1,4 @@
-name: Unified CI Pipeline
+name: CI Pipeline
 
 on:
   push:
@@ -17,7 +17,6 @@ concurrency:
 env:
   RUST_TOOLCHAIN: stable
   NODE_VERSION: "20"
-  NAPI_RS_LINK_TYPE: dynamic
   MACOSX_DEPLOYMENT_TARGET: "10.15"
 
 jobs:
@@ -196,30 +195,12 @@ jobs:
           echo "Building for target: ${{ matrix.target }}"
 
           # Build with napi-rs
-          echo "Starting cargo build..."
+          # This will create files like miniaudio_node.linux-x64-gnu.node
           bunx napi build --platform --release --target ${{ matrix.target }}
 
-          # Debug: List all .node files
           echo ""
-          echo "✅ Build complete. Listing all .node files:"
-          find . -maxdepth 2 -name "*.node" -type f | while read f; do
-            echo "  $f"
-          done
-
-          # Verify the expected artifact exists
-          echo ""
-          echo "🔍 Checking for expected artifact: ${{ matrix.artifact }}"
-          if [ -f "${{ matrix.artifact }}" ]; then
-            echo "✅ Expected artifact found: ${{ matrix.artifact }}"
-            ls -la "${{ matrix.artifact }}"
-          else
-            echo "❌ Expected artifact not found!"
-            echo "🔍 Listing top-level .node files:"
-            ls -la *.node 2>/dev/null || echo "  No .node files in root"
-            echo "🔍 Attempting to find any .node files:"
-            find . -name "*.node" -type f | head -20
-            exit 1
-          fi
+          echo "✅ Build complete. Files in root:"
+          ls -la *.node
 
       - name: Run Rust tests
         run: cargo test --verbose
@@ -227,11 +208,24 @@ jobs:
       - name: Run Node.js tests
         shell: bash
         run: |
-          # Set up the native library path for tests
-          export NAPI_RS_NATIVE_LIBRARY_PATH="${{ matrix.artifact }}"
+          echo "Preparing test environment..."
+
+          # CRITICAL FIX:
+          # The napi-rs generated index.js looks for specific filenames.
+          # To ensure tests run reliably without optionalDependencies installed,
+          # we copy the specific artifact to the default development name 'miniaudio_node.node'.
+          # This forces index.js to load the local file.
+
+          if [ -f "${{ matrix.artifact }}" ]; then
+            cp "${{ matrix.artifact }}" miniaudio_node.node
+            echo "✅ Copied ${{ matrix.artifact }} to miniaudio_node.node for testing"
+          else
+            echo "❌ Could not find ${{ matrix.artifact }}"
+            exit 1
+          fi
 
           # Run tests
-          bun test || true
+          bun test
 
       - name: Prepare artifact
         shell: bash
@@ -278,14 +272,6 @@ jobs:
             size=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null)
             echo "- $(basename $f): ${size} bytes"
           done
-          echo ""
-          echo "### Platforms built:"
-          ls -la artifacts/ | grep -E "miniaudio_node\..*\.node" || echo "No artifacts found"
-          echo ""
-          echo "### ⚠️  Note"
-          echo "macOS ARM64 builds will be added when GitHub provides macOS ARM64 runners."
-          echo "For now, releases will skip this platform."
-          echo ""
 
   final-status:
     name: CI Summary
