@@ -192,18 +192,17 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build native module
+        shell: bash
         run: |
           echo "Building for target: ${{ matrix.target }}"
           bunx napi build --platform --release --target ${{ matrix.target }}
 
-          echo "Build complete. Listing files in current directory:"
-          ls -la *.node 2>/dev/null || echo "No .node files found in current directory"
+          # Fix for "Cannot find native binding":
+          # Create a copy with the generic name so the test runner finds it easily
+          find . -maxdepth 1 -name "*.node" -exec cp {} miniaudio_node.node \;
 
-          echo "Checking for native module in out directory:"
-          ls -la out/ 2>/dev/null || echo "No out/ directory"
-
-          echo "Looking for any .node files recursively:"
-          find . -name "*.node" -type f 2>/dev/null || echo "No .node files found recursively"
+          echo "Build complete. Listing files:"
+          ls -la *.node 2>/dev/null || echo "No .node files found"
 
       - name: Run Rust tests
         run: cargo test --verbose
