@@ -40,9 +40,19 @@ jobs:
             run_tests: false
 
           # --- macOS ---
-          - os: macos-13
+          # 1. Intel (x64) Build
+          # We run on macos-15 (Apple Silicon). Rust cross-compiles to x86_64.
+          # The tests run successfully using Rosetta 2 translation.
+          - os: macos-15
             target: x86_64-apple-darwin
             artifact: miniaudio_node.darwin-x64.node
+            run_tests: true
+
+          # 2. Apple Silicon (ARM64) Build - RECOMMENDED ADDITION
+          # This is the native build for modern Macs.
+          - os: macos-15
+            target: aarch64-apple-darwin
+            artifact: miniaudio_node.darwin-arm64.node
             run_tests: true
 
           # --- Linux ---
@@ -118,7 +128,7 @@ jobs:
         if: matrix.run_tests
         shell: bash
         run: |
-          echo "🧪 Preparing to test artifact: ${{ matrix.artifact }}"
+          echo "test artifact: ${{ matrix.artifact }}"
 
           if [ ! -f "${{ matrix.artifact }}" ]; then
              echo "❌ Error: Artifact ${{ matrix.artifact }} not found!"
@@ -126,7 +136,7 @@ jobs:
           fi
 
           export NAPI_RS_NATIVE_LIBRARY_PATH="$(pwd)/${{ matrix.artifact }}"
-          echo "🔗 Linking native library from: $NAPI_RS_NATIVE_LIBRARY_PATH"
+          echo "Linking native library from: $NAPI_RS_NATIVE_LIBRARY_PATH"
 
           bun test
 
@@ -144,42 +154,3 @@ jobs:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.artifact }}
           retention-days: 7
-
-  test-summary:
-    name: Test Summary
-    needs: build-test
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    if: always()
-
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Display artifact summary
-        run: |
-          echo "## Build Artifacts Summary"
-          find artifacts -name "*.node" -type f | while read f; do
-            size=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null)
-            echo "- $(basename $f): ${size} bytes"
-          done
-
-  final-status:
-    name: CI Summary
-    needs: build-test
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: always()
-
-    steps:
-      - name: Status Summary
-        run: |
-          if [[ "${{ needs.build-test.result }}" == "success" ]]; then
-            echo "✅ All builds and tests passed!"
-          else
-            echo "⚠️  Some builds or tests failed. Check logs for details."
-            exit 1
-          fi
-        shell: bash
