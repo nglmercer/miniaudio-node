@@ -203,7 +203,7 @@ impl AudioPlayer {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or(std::time::Duration::ZERO)
                 .as_nanos();
-            
+
             if current_state == PlaybackState::Paused {
                 // Resuming from pause - calculate how long we were paused
                 if let Some(pause_start_ns) = *start_time_guard {
@@ -397,14 +397,16 @@ impl AudioPlayer {
     #[napi]
     pub fn get_current_time(&self) -> Result<f64> {
         let start_time_opt = *self.start_time.lock().unwrap();
-        
+
         if let Some(start_time_ns) = start_time_opt {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or(std::time::Duration::ZERO)
                 .as_nanos();
             let total_paused_ns = *self.total_paused_ns.lock().unwrap();
-            let playing_ns = now.saturating_sub(start_time_ns).saturating_sub(total_paused_ns);
+            let playing_ns = now
+                .saturating_sub(start_time_ns)
+                .saturating_sub(total_paused_ns);
             Ok(playing_ns as f64 / 1_000_000_000.0)
         } else {
             Ok(0.0)
@@ -414,6 +416,118 @@ impl AudioPlayer {
     #[napi]
     pub fn get_current_file(&self) -> Option<String> {
         self.current_file.clone()
+    }
+
+    #[napi]
+    pub fn seek_to(&mut self, position: f64) -> Result<()> {
+        debug_log!("Seek to position: {} seconds", position);
+
+        let duration = *self.duration.lock().unwrap();
+        if position < 0.0 || position > duration {
+            return Err(Error::new(
+                Status::InvalidArg,
+                format!("Position must be between 0.0 and {} seconds", duration),
+            ));
+        }
+
+        // Check if we have a source to seek within
+        let has_file = self.current_file.is_some();
+        let has_buffer = self.audio_buffer.lock().unwrap().is_some();
+
+        if !has_file && !has_buffer {
+            debug_log!("Seek called but no audio loaded");
+            return Err(Error::new(Status::InvalidArg, "No audio loaded"));
+        }
+
+        // Stop current playback without clearing source info
+        if let Some(sink) = self.sink.lock().unwrap().as_ref() {
+            sink.stop();
+        }
+        *self.sink.lock().unwrap() = None;
+        *self.state.lock().unwrap() = PlaybackState::Stopped;
+        debug_log!("Sink stopped for seek");
+
+        // Reset time tracking for new playback position
+        {
+            let mut start_time_guard = self.start_time.lock().unwrap();
+            let mut total_paused_guard = self.total_paused_ns.lock().unwrap();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or(std::time::Duration::ZERO)
+                .as_nanos();
+            *start_time_guard = Some(now - (position * 1_000_000_000.0) as u128);
+            *total_paused_guard = 0;
+        }
+
+        // Recreate output stream and sink
+        let stream = OutputStreamBuilder::open_default_stream().map_err(|e| {
+            debug_log!("Failed to create output stream for seek: {}", e);
+            Error::new(
+                Status::GenericFailure,
+                format!("Failed to create output stream: {}", e),
+            )
+        })?;
+
+        let sink_new = Sink::connect_new(stream.mixer());
+        *self.output_stream.lock().unwrap() = Some(stream);
+        *self.sink.lock().unwrap() = Some(sink_new);
+        debug_log!("Output stream and sink recreated for seek");
+
+        // Create source with skip and append to sink
+        let sink_guard = self.sink.lock().unwrap();
+        if let Some(sink) = sink_guard.as_ref() {
+            let volume = *self.volume.lock().unwrap();
+            sink.set_volume(volume);
+
+            if let Some(ref file_path) = self.current_file {
+                let path = Path::new(file_path);
+                let file = File::open(path).map_err(|e| {
+                    Error::new(
+                        Status::GenericFailure,
+                        format!("Failed to reopen file: {}", e),
+                    )
+                })?;
+
+                let reader = BufReader::new(file);
+                let decoder = Decoder::new(reader).map_err(|e| {
+                    Error::new(
+                        Status::GenericFailure,
+                        format!("Failed to create decoder: {}", e),
+                    )
+                })?;
+
+                // Skip to the desired position
+                let skip_duration = std::time::Duration::from_secs_f64(position);
+                let source = decoder.skip_duration(skip_duration);
+                sink.append(source);
+                debug_log!("File source appended with skip to position: {}s", position);
+            } else if let Some(ref buffer_data) = *self.audio_buffer.lock().unwrap() {
+                // For buffer sources, we skip bytes based on approximate position
+                let sample_rate = 44100.0; // Assume common sample rate
+                let bytes_per_second = sample_rate * 4.0; // 16-bit stereo = 4 bytes per sample
+                let skip_bytes = ((position * bytes_per_second) as usize).min(buffer_data.len());
+
+                let cursor = Cursor::new(buffer_data[skip_bytes..].to_vec());
+                let decoder = Decoder::new(cursor).map_err(|e| {
+                    Error::new(
+                        Status::GenericFailure,
+                        format!("Failed to create decoder: {}", e),
+                    )
+                })?;
+
+                sink.append(decoder);
+                debug_log!(
+                    "Buffer source appended with skip to position: {}s",
+                    position
+                );
+            }
+
+            sink.play();
+            *self.state.lock().unwrap() = PlaybackState::Playing;
+            debug_log!("Seek complete, playing from position: {}s", position);
+        }
+
+        Ok(())
     }
 }
 

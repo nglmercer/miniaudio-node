@@ -2,7 +2,7 @@
  * Playback Controls - Pause, Resume, Seek demo
  */
 
-import { AudioPlayer, AudioDecoder, SamplesBuffer, setDebug } from "../index.js";
+import { AudioPlayer, AudioDecoder, setDebug } from "../index.js";
 /*
 const initResult = initializeAudio();
 console.log({initResult});
@@ -23,29 +23,19 @@ console.log("Volume set to:", player.getVolume());
 
 // Load and play
 player.loadFile(file);
+//player.loadBase64("");
+//player.loadBuffer([]);
 player.play();
 
 console.log("▶️ Playing...");
 //@ts-ignore
 const monitorInterval = setInterval(() => {
     console.log(
-      `   Current time: ${player.getCurrentTime().toFixed(1)}s / ${player.getDuration().toFixed(1)}s`,
+      `   Current time: ${player.getCurrentTime().toFixed(1)}s / ${player.getDuration().toFixed(1)}s`,player.getState()
     );
 }, 1000);
 // Seek demo after 2 more seconds
 setTimeout(async () => {
   console.log("\n🔍 Seeking to middle...");
-  player.stop();
-// blocking
-const pos = duration / 2;
-const samples = decoder.decodeSlice(pos, Math.min(pos + 10, duration));
-const buf = new SamplesBuffer(decoder.getChannels(), decoder.getSampleRate(), samples);
-
-buf.play();
-/*
-*/
-    console.log(
-      `   Current time: ${player.getCurrentTime().toFixed(1)}s / ${player.getDuration().toFixed(1)}s`,
-    );
-//player.seekTo(duration / 2);
+  player.seekTo(20);
 }, 5000);

@@ -41,6 +41,7 @@ export declare class AudioPlayer {
   getDuration(): number
   getCurrentTime(): number
   getCurrentFile(): string | null
+  seekTo(position: number): void
 }
 
 /** A queue for managing multiple audio sources that play in sequence */
