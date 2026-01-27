@@ -23,26 +23,29 @@ console.log("Volume set to:", player.getVolume());
 
 // Load and play
 player.loadFile(file);
-  player.play();
+player.play();
 
 console.log("▶️ Playing...");
 //@ts-ignore
 const monitorInterval = setInterval(() => {
-  if (player.isPlaying()) {
     console.log(
       `   Current time: ${player.getCurrentTime().toFixed(1)}s / ${player.getDuration().toFixed(1)}s`,
     );
-  }
 }, 1000);
 // Seek demo after 2 more seconds
 setTimeout(async () => {
   console.log("\n🔍 Seeking to middle...");
   player.stop();
-  
-  const pos = duration / 2;
-  const samples = decoder.decodeSlice(pos, Math.min(pos + 10, duration));
-  const buf = new SamplesBuffer(decoder.getChannels(), decoder.getSampleRate(), samples);
-  
-  buf.play();
-  console.log("▶️ Playing from", pos.toFixed(0), "s (10s chunk)");
+// blocking
+const pos = duration / 2;
+const samples = decoder.decodeSlice(pos, Math.min(pos + 10, duration));
+const buf = new SamplesBuffer(decoder.getChannels(), decoder.getSampleRate(), samples);
+
+buf.play();
+/*
+*/
+    console.log(
+      `   Current time: ${player.getCurrentTime().toFixed(1)}s / ${player.getDuration().toFixed(1)}s`,
+    );
+//player.seekTo(duration / 2);
 }, 5000);

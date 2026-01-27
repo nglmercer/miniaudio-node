@@ -25,9 +25,9 @@ pub struct AudioPlayer {
     audio_buffer: Arc<Mutex<Option<Vec<u8>>>>,
     // Track if player was ever initialized
     initialized: bool,
-    // Track current playback time
-    start_time: Arc<Mutex<Option<std::time::Instant>>>,
-    total_paused_duration: Arc<Mutex<std::time::Duration>>,
+    // Track current playback time (using Unix timestamp for napi compatibility)
+    start_time: Arc<Mutex<Option<u128>>>,
+    total_paused_ns: Arc<Mutex<u128>>,
 }
 
 impl Default for AudioPlayer {
@@ -42,7 +42,7 @@ impl Default for AudioPlayer {
             audio_buffer: Arc::new(Mutex::new(None)),
             initialized: false,
             start_time: Arc::new(Mutex::new(None)),
-            total_paused_duration: Arc::new(Mutex::new(std::time::Duration::ZERO)),
+            total_paused_ns: Arc::new(Mutex::new(0)),
         }
     }
 }
@@ -197,20 +197,24 @@ impl AudioPlayer {
         // Track playback time
         {
             let mut start_time_guard = self.start_time.lock().unwrap();
-            let mut total_paused_guard = self.total_paused_duration.lock().unwrap();
+            let mut total_paused_guard = self.total_paused_ns.lock().unwrap();
             let current_state = self.state.lock().unwrap().clone();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or(std::time::Duration::ZERO)
+                .as_nanos();
             
             if current_state == PlaybackState::Paused {
                 // Resuming from pause - calculate how long we were paused
-                if let Some(pause_start) = *start_time_guard {
-                    let paused_duration = pause_start.elapsed();
-                    *total_paused_guard = total_paused_guard.saturating_add(paused_duration);
+                if let Some(pause_start_ns) = *start_time_guard {
+                    let paused_ns = now.saturating_sub(pause_start_ns);
+                    *total_paused_guard = total_paused_guard.saturating_add(paused_ns);
                 }
             } else {
                 // Fresh start - reset everything
-                *total_paused_guard = std::time::Duration::ZERO;
+                *total_paused_guard = 0;
             }
-            *start_time_guard = Some(std::time::Instant::now());
+            *start_time_guard = Some(now);
         }
 
         // Always ensure sink is available - recreate if needed
@@ -294,7 +298,11 @@ impl AudioPlayer {
         // Track pause start time
         {
             let mut start_time_guard = self.start_time.lock().unwrap();
-            *start_time_guard = Some(std::time::Instant::now());
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or(std::time::Duration::ZERO)
+                .as_nanos();
+            *start_time_guard = Some(now);
         }
 
         let sink_guard = self.sink.lock().unwrap();
@@ -326,9 +334,9 @@ impl AudioPlayer {
         // Reset time tracking
         {
             let mut start_time_guard = self.start_time.lock().unwrap();
-            let mut total_paused_guard = self.total_paused_duration.lock().unwrap();
+            let mut total_paused_guard = self.total_paused_ns.lock().unwrap();
             *start_time_guard = None;
-            *total_paused_guard = std::time::Duration::ZERO;
+            *total_paused_guard = 0;
         }
 
         if let Some(sink) = self.sink.lock().unwrap().as_ref() {
@@ -390,11 +398,14 @@ impl AudioPlayer {
     pub fn get_current_time(&self) -> Result<f64> {
         let start_time_opt = *self.start_time.lock().unwrap();
         
-        if let Some(start_time) = start_time_opt {
-            let elapsed = start_time.elapsed();
-            let total_paused = *self.total_paused_duration.lock().unwrap();
-            let playing_time = elapsed.saturating_sub(total_paused);
-            Ok(playing_time.as_secs() as f64 + playing_time.subsec_nanos() as f64 / 1_000_000_000.0)
+        if let Some(start_time_ns) = start_time_opt {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or(std::time::Duration::ZERO)
+                .as_nanos();
+            let total_paused_ns = *self.total_paused_ns.lock().unwrap();
+            let playing_ns = now.saturating_sub(start_time_ns).saturating_sub(total_paused_ns);
+            Ok(playing_ns as f64 / 1_000_000_000.0)
         } else {
             Ok(0.0)
         }
