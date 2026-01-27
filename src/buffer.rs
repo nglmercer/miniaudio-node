@@ -2,6 +2,7 @@
 
 use napi_derive::napi;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// A buffer containing audio samples
 #[napi]
@@ -75,7 +76,6 @@ impl SamplesBuffer {
     #[napi]
     pub fn play(&self) -> napi::Result<()> {
         use rodio::{OutputStreamBuilder, Sink, Source};
-        use std::time::Duration;
 
         let stream = OutputStreamBuilder::open_default_stream()
             .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;
@@ -141,6 +141,10 @@ impl SamplesBuffer {
 
         sink.append(source);
         sink.play();
+
+        // Block until playback finishes to keep stream alive
+        sink.sleep_until_end();
+
         Ok(())
     }
 }

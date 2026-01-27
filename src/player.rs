@@ -23,6 +23,8 @@ pub struct AudioPlayer {
     #[allow(dead_code)]
     output_stream: Arc<Mutex<Option<OutputStream>>>,
     audio_buffer: Arc<Mutex<Option<Vec<u8>>>>,
+    // Track if player was ever initialized
+    initialized: bool,
 }
 
 impl Default for AudioPlayer {
@@ -35,6 +37,7 @@ impl Default for AudioPlayer {
             sink: Arc::new(Mutex::new(None)),
             output_stream: Arc::new(Mutex::new(None)),
             audio_buffer: Arc::new(Mutex::new(None)),
+            initialized: false,
         }
     }
 }
@@ -73,6 +76,8 @@ impl AudioPlayer {
             ));
         }
 
+        // Mark as initialized before stopping (to allow cleanup if player was used before)
+        self.initialized = true;
         self.stop().ok();
 
         // Validate file opening
@@ -111,6 +116,8 @@ impl AudioPlayer {
             debug_log!("Audio buffer is empty");
             return Err(Error::new(Status::InvalidArg, "Audio buffer is empty"));
         }
+        // Mark as initialized before stopping (to allow cleanup if player was used before)
+        self.initialized = true;
         self.stop().ok();
 
         let cursor = Cursor::new(audio_data.clone());
@@ -259,11 +266,9 @@ impl AudioPlayer {
     #[napi]
     pub fn stop(&mut self) -> Result<()> {
         debug_log!("Stop called");
-        let has_buffer = self.audio_buffer.lock().unwrap().is_some();
-        let has_file = self.current_file.is_some();
-        let sink_exists = self.sink.lock().unwrap().is_some();
 
-        if !has_buffer && !has_file && !sink_exists {
+        // Only error if player was never initialized
+        if !self.initialized {
             debug_log!("Cannot stop - player not initialized");
             return Err(Error::new(Status::InvalidArg, "Player not initialized"));
         }
