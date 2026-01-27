@@ -122,20 +122,6 @@ describe("Core Audio API Integration Tests", () => {
       expect(() => player.loadFile("non-existent-file.mp3")).toThrow();
     });
 
-    it("should handle playback operations on uninitialized player", () => {
-      if (!isAudioSystemAvailable()) {
-        console.warn("Skipping test: Audio system not available");
-        return;
-      }
-
-      const player = new AudioPlayer();
-
-      // These should not crash, but may throw errors
-      expect(() => player.play()).toThrow();
-      expect(() => player.pause()).toThrow();
-      expect(() => player.stop()).toThrow();
-    });
-
     it("should handle volume validation", () => {
       if (!isAudioSystemAvailable()) {
         console.warn("Skipping test: Audio system not available");

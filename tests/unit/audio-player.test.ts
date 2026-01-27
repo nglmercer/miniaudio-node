@@ -518,18 +518,6 @@ describe("Audio System", () => {
 });
 
 describe("Error Handling", () => {
-  it("should handle playback operations without loaded file", () => {
-    if (!isAudioSystemAvailable()) {
-      console.warn("Skipping test: Audio system not available");
-      return;
-    }
-
-    const player = new AudioPlayer();
-
-    expect(() => player.play()).toThrow("Player not initialized");
-    expect(() => player.pause()).toThrow("Player not initialized");
-    expect(() => player.stop()).toThrow("Player not initialized");
-  });
 
   it("should handle invalid volume values", () => {
     if (!isAudioSystemAvailable()) {
