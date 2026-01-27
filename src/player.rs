@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose, Engine as _};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
-use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
+use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
 use std::fs::File;
 use std::io::{BufReader, Cursor};
 use std::path::Path;
@@ -19,12 +19,15 @@ pub struct AudioPlayer {
     state: Arc<Mutex<PlaybackState>>,
     duration: Arc<Mutex<f64>>,
     sink: Arc<Mutex<Option<Sink>>>,
-    // OutputStream needs to be kept alive
+    // OutputStream needs to be kept alive along with sink
     #[allow(dead_code)]
-    output_stream: Arc<Mutex<Option<OutputStream>>>,
+    output_stream: Arc<Mutex<Option<rodio::OutputStream>>>,
     audio_buffer: Arc<Mutex<Option<Vec<u8>>>>,
     // Track if player was ever initialized
     initialized: bool,
+    // Track current playback time
+    start_time: Arc<Mutex<Option<std::time::Instant>>>,
+    total_paused_duration: Arc<Mutex<std::time::Duration>>,
 }
 
 impl Default for AudioPlayer {
@@ -38,6 +41,8 @@ impl Default for AudioPlayer {
             output_stream: Arc::new(Mutex::new(None)),
             audio_buffer: Arc::new(Mutex::new(None)),
             initialized: false,
+            start_time: Arc::new(Mutex::new(None)),
+            total_paused_duration: Arc::new(Mutex::new(std::time::Duration::ZERO)),
         }
     }
 }
@@ -52,7 +57,23 @@ impl Drop for AudioPlayer {
 impl AudioPlayer {
     #[napi(constructor)]
     pub fn new() -> Result<Self> {
-        Ok(Self::default())
+        let player = Self::default();
+
+        // Try to initialize the output stream and sink immediately
+        // This prevents the first-play delay
+        match OutputStreamBuilder::open_default_stream() {
+            Ok(stream) => {
+                let sink = Sink::connect_new(stream.mixer());
+                *player.output_stream.lock().unwrap() = Some(stream);
+                *player.sink.lock().unwrap() = Some(sink);
+                debug_log!("Audio stream initialized in constructor");
+            }
+            Err(e) => {
+                debug_log!("Failed to open default audio output in constructor: {}", e);
+            }
+        }
+
+        Ok(player)
     }
 
     #[napi]
@@ -168,12 +189,39 @@ impl AudioPlayer {
             return Err(Error::new(Status::InvalidArg, "Player not initialized"));
         }
 
-        let current_state = self.state.lock().unwrap().clone();
-        debug_log!("Play called, current state: {:?}", current_state);
-        if current_state != PlaybackState::Playing {
+        debug_log!(
+            "Play called, current state: {:?}",
+            self.state.lock().unwrap().clone()
+        );
+
+        // Track playback time
+        {
+            let mut start_time_guard = self.start_time.lock().unwrap();
+            let mut total_paused_guard = self.total_paused_duration.lock().unwrap();
+            let current_state = self.state.lock().unwrap().clone();
+            
+            if current_state == PlaybackState::Paused {
+                // Resuming from pause - calculate how long we were paused
+                if let Some(pause_start) = *start_time_guard {
+                    let paused_duration = pause_start.elapsed();
+                    *total_paused_guard = total_paused_guard.saturating_add(paused_duration);
+                }
+            } else {
+                // Fresh start - reset everything
+                *total_paused_guard = std::time::Duration::ZERO;
+            }
+            *start_time_guard = Some(std::time::Instant::now());
+        }
+
+        // Always ensure sink is available - recreate if needed
+        let sink_needs_source = {
             let mut output_stream_guard = self.output_stream.lock().unwrap();
-            if output_stream_guard.is_none() {
-                debug_log!("Creating output stream...");
+            let mut sink_guard = self.sink.lock().unwrap();
+
+            // Create new stream and sink if either is missing
+            if sink_guard.is_none() || output_stream_guard.is_none() {
+                debug_log!("Recreating output stream and sink...");
+
                 let stream = OutputStreamBuilder::open_default_stream().map_err(|e| {
                     debug_log!("Failed to create output stream: {}", e);
                     Error::new(
@@ -182,52 +230,48 @@ impl AudioPlayer {
                     )
                 })?;
 
-                // We keep the stream alive
+                let sink = Sink::connect_new(stream.mixer());
+
                 *output_stream_guard = Some(stream);
-                debug_log!("Output stream created");
-
-                // Create sink using the mixer from the output stream
-                let output_stream_ref = output_stream_guard.as_ref().unwrap();
-                let sink = Sink::connect_new(output_stream_ref.mixer());
-
-                *self.sink.lock().unwrap() = Some(sink);
+                *sink_guard = Some(sink);
+                debug_log!("Output stream and sink recreated");
+                true // New sink needs a source
+            } else {
+                // Sink exists, check if it needs a source
+                sink_guard.as_ref().map(|s| s.empty()).unwrap_or(true)
             }
+        };
 
-            // At this point sink should exist or be recreatable, logic slightly simplified for brevity
-            // Note: Rodio's architecture usually requires keeping the Stream alive.
-            // In the original code, `OutputStreamBuilder` was used which is slightly different.
-            // Assuming we use the existing sink logic:
+        // Append source and play
+        let sink_guard = self.sink.lock().unwrap();
+        if let Some(sink) = sink_guard.as_ref() {
+            let volume = *self.volume.lock().unwrap();
+            sink.set_volume(volume);
+            debug_log!("Setting volume to: {}", volume);
 
-            let sink_guard = self.sink.lock().unwrap();
-            if let Some(sink) = sink_guard.as_ref() {
-                let volume = *self.volume.lock().unwrap();
-                sink.set_volume(volume);
-                debug_log!("Setting volume to: {}", volume);
-
-                if sink.empty() {
-                    debug_log!("Sink is empty, appending source...");
-                    if let Some(buffer_data) = self.audio_buffer.lock().unwrap().clone() {
-                        debug_log!("Playing from buffer ({} bytes)", buffer_data.len());
-                        let cursor = Cursor::new(buffer_data);
-                        let source = Decoder::new(cursor).unwrap();
-                        sink.append(source);
-                    } else if let Some(file_path) = &self.current_file {
-                        debug_log!("Playing from file: {}", file_path);
-                        let file = File::open(file_path).unwrap();
-                        let source = Decoder::new(BufReader::new(file)).unwrap();
-                        sink.append(source);
-                    }
-                    sink.play();
-                    debug_log!("Sink playing");
-                } else {
-                    debug_log!("Resuming paused audio");
-                    sink.play(); // Resume if paused
+            if sink_needs_source || sink.empty() {
+                debug_log!("Sink is empty, appending source...");
+                if let Some(buffer_data) = self.audio_buffer.lock().unwrap().clone() {
+                    debug_log!("Playing from buffer ({} bytes)", buffer_data.len());
+                    let cursor = Cursor::new(buffer_data);
+                    let source = Decoder::new(cursor).unwrap();
+                    sink.append(source);
+                } else if let Some(file_path) = &self.current_file {
+                    debug_log!("Playing from file: {}", file_path);
+                    let file = File::open(file_path).unwrap();
+                    let source = Decoder::new(BufReader::new(file)).unwrap();
+                    sink.append(source);
                 }
+            } else {
+                debug_log!("Resuming paused audio");
             }
-
-            *self.state.lock().unwrap() = PlaybackState::Playing;
-            debug_log!("State set to Playing");
+            sink.play();
+            debug_log!("Sink playing");
         }
+
+        *self.state.lock().unwrap() = PlaybackState::Playing;
+        debug_log!("State set to Playing");
+
         Ok(())
     }
 
@@ -245,6 +289,12 @@ impl AudioPlayer {
         if current_state == PlaybackState::Stopped {
             debug_log!("Player is stopped, nothing to pause");
             return Ok(());
+        }
+
+        // Track pause start time
+        {
+            let mut start_time_guard = self.start_time.lock().unwrap();
+            *start_time_guard = Some(std::time::Instant::now());
         }
 
         let sink_guard = self.sink.lock().unwrap();
@@ -271,6 +321,14 @@ impl AudioPlayer {
         if !self.initialized {
             debug_log!("Cannot stop - player not initialized");
             return Err(Error::new(Status::InvalidArg, "Player not initialized"));
+        }
+
+        // Reset time tracking
+        {
+            let mut start_time_guard = self.start_time.lock().unwrap();
+            let mut total_paused_guard = self.total_paused_duration.lock().unwrap();
+            *start_time_guard = None;
+            *total_paused_guard = std::time::Duration::ZERO;
         }
 
         if let Some(sink) = self.sink.lock().unwrap().as_ref() {
@@ -330,7 +388,16 @@ impl AudioPlayer {
 
     #[napi]
     pub fn get_current_time(&self) -> Result<f64> {
-        Ok(0.0)
+        let start_time_opt = *self.start_time.lock().unwrap();
+        
+        if let Some(start_time) = start_time_opt {
+            let elapsed = start_time.elapsed();
+            let total_paused = *self.total_paused_duration.lock().unwrap();
+            let playing_time = elapsed.saturating_sub(total_paused);
+            Ok(playing_time.as_secs() as f64 + playing_time.subsec_nanos() as f64 / 1_000_000_000.0)
+        } else {
+            Ok(0.0)
+        }
     }
 
     #[napi]

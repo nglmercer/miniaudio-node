@@ -3,6 +3,10 @@
  */
 
 import { AudioPlayer, AudioDecoder, SamplesBuffer, setDebug } from "../index.js";
+/*
+const initResult = initializeAudio();
+console.log({initResult});
+*/
 setDebug(true)
 const file = process.argv[2] || "/home/meme/Música/test.mp3";
 const player = new AudioPlayer();
@@ -18,19 +22,18 @@ player.setVolume(1.0);
 console.log("Volume set to:", player.getVolume());
 
 // Load and play
-await player.loadFile(file);
-player.play();
+player.loadFile(file);
+  player.play();
 
 console.log("▶️ Playing...");
-
-// Keep process alive until playback finishes
-const keepAlive = setInterval(() => {
-  if (!player.isPlaying()) {
-    clearInterval(keepAlive);
+//@ts-ignore
+const monitorInterval = setInterval(() => {
+  if (player.isPlaying()) {
+    console.log(
+      `   Current time: ${player.getCurrentTime().toFixed(1)}s / ${player.getDuration().toFixed(1)}s`,
+    );
   }
-}, 100);
-
-
+}, 1000);
 // Seek demo after 2 more seconds
 setTimeout(async () => {
   console.log("\n🔍 Seeking to middle...");
