@@ -34,6 +34,7 @@
     "clean": "napi clean && cargo clean",
     "copy:artifacts": "bun ./scripts/copy-artifacts.js",
     "examples:simple": "bun ./examples/simple-playback.ts",
+    "examples:controls": "bun ./examples/playback-controls.ts",
     "examples:buffer": "bun ./examples/buffer-loading.ts",
     "examples:device": "bun ./examples/device-management.ts",
     "examples:playlist": "bun ./examples/playlist.ts",

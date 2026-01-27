@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose, Engine as _};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
-use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink};
+use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
 use std::fs::File;
 use std::io::{BufReader, Cursor};
 use std::path::Path;
@@ -79,17 +79,27 @@ impl AudioPlayer {
         let file = File::open(path)
             .map_err(|e| Error::new(Status::InvalidArg, format!("Failed to open file: {}", e)))?;
         let reader = BufReader::new(file);
-        let _decoder = Decoder::new(reader).map_err(|e| {
+        let decoder = Decoder::new(reader).map_err(|e| {
             Error::new(
                 Status::InvalidArg,
                 format!("Failed to create decoder: {}", e),
             )
         })?;
 
-        *self.duration.lock().unwrap() = 0.0;
+        // Calculate duration from decoder
+        let duration = decoder
+            .total_duration()
+            .unwrap_or(std::time::Duration::ZERO);
+        let duration_seconds =
+            duration.as_secs() as f64 + duration.subsec_nanos() as f64 / 1_000_000_000.0;
+        *self.duration.lock().unwrap() = duration_seconds;
+
+        debug_log!(
+            "File loaded successfully, duration: {} seconds",
+            duration_seconds
+        );
         self.current_file = Some(file_path);
         *self.state.lock().unwrap() = PlaybackState::Loaded;
-        debug_log!("File loaded successfully");
 
         Ok(())
     }
@@ -217,6 +227,19 @@ impl AudioPlayer {
     #[napi]
     pub fn pause(&mut self) -> Result<()> {
         debug_log!("Pause called");
+        let current_state = self.state.lock().unwrap().clone();
+
+        // If already paused or stopped with no sink, just update state
+        if current_state == PlaybackState::Paused {
+            debug_log!("Already paused, no action needed");
+            return Ok(());
+        }
+
+        if current_state == PlaybackState::Stopped {
+            debug_log!("Player is stopped, nothing to pause");
+            return Ok(());
+        }
+
         let sink_guard = self.sink.lock().unwrap();
         if let Some(sink) = sink_guard.as_ref() {
             sink.pause();
@@ -224,8 +247,12 @@ impl AudioPlayer {
             debug_log!("State set to Paused");
             Ok(())
         } else {
-            debug_log!("Cannot pause - player not initialized");
-            Err(Error::new(Status::InvalidArg, "Player not initialized"))
+            // Sink doesn't exist but player is in Playing/Loaded state
+            // This can happen after stop() was called but before play()
+            // Just update state to Paused since there's nothing playing
+            *self.state.lock().unwrap() = PlaybackState::Paused;
+            debug_log!("No sink available, state set to Paused anyway");
+            Ok(())
         }
     }
 
@@ -234,8 +261,9 @@ impl AudioPlayer {
         debug_log!("Stop called");
         let has_buffer = self.audio_buffer.lock().unwrap().is_some();
         let has_file = self.current_file.is_some();
+        let sink_exists = self.sink.lock().unwrap().is_some();
 
-        if !has_buffer && !has_file {
+        if !has_buffer && !has_file && !sink_exists {
             debug_log!("Cannot stop - player not initialized");
             return Err(Error::new(Status::InvalidArg, "Player not initialized"));
         }
@@ -244,8 +272,6 @@ impl AudioPlayer {
             debug_log!("Stopping sink");
             sink.stop();
         }
-        // Re-create sink logic might be needed here depending on rodio version behavior,
-        // usually stop() kills the sink.
         *self.sink.lock().unwrap() = None;
         *self.audio_buffer.lock().unwrap() = None;
         *self.state.lock().unwrap() = PlaybackState::Stopped;

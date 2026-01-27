@@ -11,7 +11,8 @@ import { AudioPlayer, initializeAudio, getSupportedFormats } from "../index.js";
 // Import苎 kinds of audio file paths for different platforms
 function getPlatformSoundPaths(): string[] {
   const platform = process.platform;
-
+  const filePath = process.argv[2] || null;
+  if (filePath) return [filePath,filePath];
   if (platform === "win32") {
     return [
       "C:/Windows/Media/tada.wav",
@@ -133,10 +134,7 @@ async function runSimplePlayback() {
         );
       }
     } else {
-      console.log("\n⚠️  No system sounds found for this platform.");
-      console.log("   You can test with your own audio files by:");
-      console.log("   - Modify the code to use your audio file path");
-      console.log("   - Pass the path as a command line argument");
+      console.log("no audio files found");
     }
 
     // Check if a file path was provided as argument
