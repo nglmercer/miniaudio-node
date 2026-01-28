@@ -422,13 +422,26 @@ impl AudioPlayer {
     pub fn seek_to(&mut self, position: f64) -> Result<()> {
         debug_log!("Seek to position: {} seconds", position);
 
+        // Validate position - handle decimal precision issues
+        if position.is_nan() || position.is_infinite() {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Position must be a valid finite number",
+            ));
+        }
+
         let duration = *self.duration.lock().unwrap();
-        if position < 0.0 || position > duration {
+        // Use a small epsilon for floating point comparison
+        let epsilon = 1e-9;
+        if position < -epsilon || position > duration + epsilon {
             return Err(Error::new(
                 Status::InvalidArg,
                 format!("Position must be between 0.0 and {} seconds", duration),
             ));
         }
+
+        // Clamp position to valid range
+        let position = position.max(0.0).min(duration);
 
         // Check if we have a source to seek within
         let has_file = self.current_file.is_some();
@@ -440,8 +453,11 @@ impl AudioPlayer {
         }
 
         // Stop current playback without clearing source info
-        if let Some(sink) = self.sink.lock().unwrap().as_ref() {
-            sink.stop();
+        {
+            let sink_guard = self.sink.lock().unwrap();
+            if let Some(sink) = sink_guard.as_ref() {
+                sink.stop();
+            }
         }
         *self.sink.lock().unwrap() = None;
         *self.state.lock().unwrap() = PlaybackState::Stopped;
@@ -455,23 +471,37 @@ impl AudioPlayer {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or(std::time::Duration::ZERO)
                 .as_nanos();
-            *start_time_guard = Some(now - (position * 1_000_000_000.0) as u128);
+
+            // Calculate the effective start time (now minus the seek position)
+            // Use saturating arithmetic to prevent underflow
+            let seek_position_ns = (position * 1_000_000_000.0) as u128;
+            *start_time_guard = Some(now.saturating_sub(seek_position_ns));
             *total_paused_guard = 0;
         }
 
-        // Recreate output stream and sink
-        let stream = OutputStreamBuilder::open_default_stream().map_err(|e| {
-            debug_log!("Failed to create output stream for seek: {}", e);
-            Error::new(
-                Status::GenericFailure,
-                format!("Failed to create output stream: {}", e),
-            )
-        })?;
+        // Recreate output stream and sink only if needed
+        {
+            let output_stream_guard = self.output_stream.lock().unwrap();
+            let sink_guard = self.sink.lock().unwrap();
 
-        let sink_new = Sink::connect_new(stream.mixer());
-        *self.output_stream.lock().unwrap() = Some(stream);
-        *self.sink.lock().unwrap() = Some(sink_new);
-        debug_log!("Output stream and sink recreated for seek");
+            if sink_guard.is_none() || output_stream_guard.is_none() {
+                drop(sink_guard);
+                drop(output_stream_guard);
+
+                let stream = OutputStreamBuilder::open_default_stream().map_err(|e| {
+                    debug_log!("Failed to create output stream for seek: {}", e);
+                    Error::new(
+                        Status::GenericFailure,
+                        format!("Failed to create output stream: {}", e),
+                    )
+                })?;
+
+                let sink_new = Sink::connect_new(stream.mixer());
+                *self.output_stream.lock().unwrap() = Some(stream);
+                *self.sink.lock().unwrap() = Some(sink_new);
+                debug_log!("Output stream and sink recreated for seek");
+            }
+        }
 
         // Create source with skip and append to sink
         let sink_guard = self.sink.lock().unwrap();

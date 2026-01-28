@@ -1,304 +1,327 @@
-/**
- * Playlist Example with TypeScript and Bun
- *
- * This example demonstrates how to:
- * 1. Create and manage playlists
- * 2. Load multiple audio files
- * 3. Control playback (play, pause, stop, next, previous)
- * 4. Set volume and other properties
- * 5. Handle playlist events
- */
-
 import {
   AudioPlayer,
-  AudioPlayerConfig,
-  getSupportedFormats,
-} from "../index.js";
-import { existsSync, statSync } from "node:fs";
+  createAudioPlayer,
+  isFormatSupported,
+} from "../index";
+import type { AudioPlayerConfig } from "../index";
+import Logger from "./utils/logger";
+import { TrackEndReason, TrackEvents, PLAYBACK_DEFAULTS } from "./utils/const";
+import type { Song } from "./utils/scanner";
 
-interface PlaylistTrack {
-  path: string;
-  name: string;
-  duration: number;
-  index: number;
-}
+export type Track = string | Buffer;
 
-class Playlist {
-  private tracks: PlaylistTrack[] = [];
-  private currentIndex: number = 0;
+/**
+ * Playlist manager class for handling multiple audio files and buffers
+ * with race condition prevention and proper state management.
+ */
+export class PlaylistManager {
   private player: AudioPlayer;
-  private isPlaying: boolean = false;
-  private isPaused: boolean = false;
-  private volume: number = 1.0;
-  private loop: "none" | "all" | "one" = "none";
-  private shuffle: boolean = false;
+  private tracks: Track[] = [];
+  private songs: Song[] = []; // Store song metadata
+  private currentTrackIndex: number = 0;
+  private loop: boolean = false;
 
-  constructor(config?: AudioPlayerConfig) {
-    this.player = new AudioPlayer();
-    if (config?.volume !== undefined) {
-      this.volume = config.volume;
-      this.player.setVolume(config.volume);
+  // State management for preventing race conditions
+  private monitorInterval: NodeJS.Timeout | null = null;
+  private isStopping: boolean = false;
+  
+  // Event callbacks
+  public onTrackStart?: (track: Track, index: number) => void;
+  public onTrackEnd?: (
+    track: Track,
+    index: number,
+    reason: TrackEndReason,
+  ) => void;
+  public onPlaylistEnd?: () => void;
+
+  constructor(options?: AudioPlayerConfig | undefined) {
+    this.player = createAudioPlayer(options);
+  }
+  log(name: string, ...args: any[]) {
+    Logger.info(name, ...args);
+  }
+  warn(name: string, ...args: any[]) {
+    Logger.warn(name, ...args);
+  }
+  setIndex(index: number) {
+    if (index >= 0 && index < this.tracks.length) {
+      this.currentTrackIndex = index;
     }
+  }
+  /**
+   * Load multiple tracks into playlist with metadata scanning
+   */
+  async loadTracks(tracks: Track[]): Promise<void> {
+      const validTracks: Track[] = [];
+      for (const track of tracks) {
+        if (typeof track === "string") {
+          const extension = track.split(".").pop()?.toLowerCase();
+          if (extension && isFormatSupported(extension)) {
+            validTracks.push(track);
+          }
+        } else {
+          validTracks.push(track);
+        }
+      }
+      this.tracks = validTracks;
+    }
+
+  /**
+   * Add a single track to the end of the playlist
+   */
+  async addTrack(track: Track): Promise<void> {
+    // Validate track
+    if (typeof track === "string") {
+      const extension = track.split(".")?.pop()?.toLowerCase();
+      if (!extension || !isFormatSupported(extension)) {
+        throw new Error(`Unsupported format or invalid extension: ${track}`);
+      }
+
+      const fs = await import("node:fs");
+      if (!fs.existsSync(track)) {
+        throw new Error(`File not found: ${track}`);
+      }
+    }
+
+    this.tracks.push(track);
+    console.log(`✅ Added track. Total: ${this.tracks.length}`);
   }
 
   /**
-   * Add a single track to the playlist
+   * Load songs with metadata using the library's AudioDecoder
    */
-  async addTrack(filePath: string): Promise<boolean> {
+  async loadSongs(songs: Song[]): Promise<void> {
+    this.songs = songs;
+    this.tracks = songs.map(song => song.path);
+    console.log(`✅ Loaded ${songs.length} songs from metadata scan`);
+  }
+
+  /**
+   * Get metadata for current track using library methods
+   */
+  getCurrentTrackMetadata(): Song | null {
+    if (this.currentTrackIndex >= 0 && this.currentTrackIndex < this.songs.length) {
+      return this.songs[this.currentTrackIndex];
+    }
+    return null;
+  }
+
+  /**
+   * Get metadata for a specific track index
+   */
+  getTrackMetadata(index: number): Song | null {
+    if (index >= 0 && index < this.songs.length) {
+      return this.songs[index];
+    }
+    return null;
+  }
+
+  /**
+   * Play current track with lock mechanism to prevent race conditions
+   */
+ async playCurrentTrack(): Promise<void> {
+    if (this.tracks.length === 0) return;
+
+    const track = this.tracks[this.currentTrackIndex];
     try {
-      // Validate file
-      if (!existsSync(filePath)) {
-        console.warn(`⚠️  File not found: ${filePath}`);
-        return false;
+      if (typeof track === "string") {
+        this.player.loadFile(track);
+      } else {
+        if (!track){
+          this.warn('track is undefined')
+          return
+        }
+        this.player.loadBuffer(Array.from(track));
       }
 
-      const stats = statSync(filePath);
-      if (stats.isDirectory()) {
-        console.warn(`⚠️  Is directory: ${filePath}`);
-        return false;
+      // Small delay to ensure miniaudio device is ready
+      setTimeout(() => this.player.play(), PLAYBACK_DEFAULTS.SEEK_DELAY_MS);
+      this.monitorPlayback();
+    } catch (e) {
+      console.error("Playback failed", e);
+    }
+  }
+
+  /**
+   * Monitor playback and advance to next track when needed
+   */
+  private monitorPlayback(): void {
+    this.clearMonitorInterval();
+
+    this.monitorInterval = setInterval(() => {
+      if (this.isStopping) {
+        return;
       }
 
-      // Get file name
-      const path = require("node:path");
-      const name = path.basename(filePath);
-
-      // Try to load the file to get duration
-      let duration = 0;
       try {
-        this.player.loadFile(filePath);
-        duration = this.player.getDuration();
-        this.player.stop(); // Stop after checking
+        const isPlayerReallyPlaying = this.player.isPlaying();
+
+        if (!isPlayerReallyPlaying) {
+          this.clearMonitorInterval();
+
+          const currentTrack = this.tracks[this.currentTrackIndex];
+          if (currentTrack && this.onTrackEnd) {
+            this.onTrackEnd(currentTrack, this.currentTrackIndex, TrackEndReason.COMPLETED);
+          }
+
+          setImmediate(() => {
+            if (!this.isStopping) {
+              this.nextTrack();
+            }
+          });
+        }
       } catch (error) {
-        console.warn(`⚠️  Could not load file: ${name}`);
-        return false;
+        console.error({error});
+        this.clearMonitorInterval();
       }
+    }, PLAYBACK_DEFAULTS.MONITOR_INTERVAL_MS);
+  }
 
-      // Add to playlist
-      const track: PlaylistTrack = {
-        path: filePath,
-        name: name,
-        duration: duration,
-        index: this.tracks.length,
-      };
-
-      this.tracks.push(track);
-      console.log(`✅ Added: ${name} (${duration.toFixed(2)}s)`);
-      return true;
-    } catch (error) {
-      console.error(`❌ Failed to add track:`, (error as Error).message);
-      return false;
+  /**
+   * Clear monitoring interval safely
+   */
+  private clearMonitorInterval(): void {
+    if (this.monitorInterval) {
+      clearInterval(this.monitorInterval);
+      this.monitorInterval = null;
     }
   }
 
   /**
-   * Add multiple tracks to the playlist
+   * Play next track in playlist
    */
-  async addTracks(filePaths: string[]): Promise<number> {
-    let added = 0;
-    console.log(`📝 Loading ${filePaths.length} tracks...`);
+  async nextTrack(): Promise<void> {
 
-    for (const path of filePaths) {
-      if (await this.addTrack(path)) {
-        added++;
+    this.currentTrackIndex++;
+
+    if (this.currentTrackIndex >= this.tracks.length) {
+      if (this.loop) {
+        this.currentTrackIndex = 0;
+        console.log({looping: true});
+      } else {
+        console.log({end_of_playlist: true});
+        this.clearMonitorInterval();
+
+        if (this.onPlaylistEnd) {
+          this.onPlaylistEnd();
+        }
+        return;
       }
     }
 
-    console.log(`✅ Added ${added}/${filePaths.length} tracks to playlist`);
-    return added;
+    await this.playCurrentTrack();
   }
 
   /**
-   * Remove track at index
+   * Play previous track
    */
-  removeTrack(index: number): void {
+  async previousTrack(): Promise<void> {
+
+    this.currentTrackIndex = Math.max(0, this.currentTrackIndex - 1);
+    await this.playCurrentTrack();
+  }
+
+  /**
+   * Go to specific track index (0-based)
+   */
+  async goToTrack(index: number): Promise<void> {
     if (index < 0 || index >= this.tracks.length) {
       throw new Error(`Invalid track index: ${index}`);
     }
 
-    const removed = this.tracks.splice(index, 1);
-    console.log(`🗑️  Removed: ${removed[0].name}`);
-
-    // Adjust current index if needed
-    if (this.currentIndex >= index && this.currentIndex > 0) {
-      this.currentIndex--;
-    }
+    this.currentTrackIndex = index;
+    await this.playCurrentTrack();
   }
 
   /**
-   * Clear the playlist
-   */
-  clear(): void {
-    const count = this.tracks.length;
-    this.tracks = [];
-    this.currentIndex = 0;
-    this.isPlaying = false;
-    this.isPaused = false;
-    console.log(`🧹 Cleared ${count} tracks from playlist`);
-  }
-
-  /**
-   * Get track by index
-   */
-  getTrack(index: number): PlaylistTrack | null {
-    return this.tracks[index] || null;
-  }
-
-  /**
-   * Get current track
-   */
-  getCurrentTrack(): PlaylistTrack | null {
-    if (this.tracks.length === 0) return null;
-    return this.tracks[this.currentIndex];
-  }
-
-  /**
-   * Get all tracks
-   */
-  getTracks(): PlaylistTrack[] {
-    return [...this.tracks];
-  }
-
-  /**
-   * Get total duration of playlist
-   */
-  getTotalDuration(): number {
-    return this.tracks.reduce((sum, track) => sum + track.duration, 0);
-  }
-
-  /**
-   * Play current track
-   */
-  async play(index?: number): Promise<void> {
-    if (this.tracks.length === 0) {
-      throw new Error("Playlist is empty");
-    }
-
-    if (index !== undefined) {
-      if (index < 0 || index >= this.tracks.length) {
-        throw new Error(`Invalid track index: ${index}`);
-      }
-      this.currentIndex = index;
-      this.stop();
-    }
-
-    const track = this.getCurrentTrack();
-    if (!track) {
-      throw new Error("No current track");
-    }
-
-    try {
-      console.log(`🎵 Playing: ${track.name} (${track.duration.toFixed(2)}s)`);
-      this.player.loadFile(track.path);
-      this.player.setVolume(this.volume);
-      this.player.play();
-      this.isPlaying = true;
-      this.isPaused = false;
-
-      // Set up auto-advance if needed
-      if (this.loop === "one") {
-        this.setupAutoAdvanceOne();
-      } else if (this.loop === "all" || this.shuffle) {
-        this.setupAutoAdvance();
-      }
-    } catch (error) {
-      this.isPlaying = false;
-      throw error;
-    }
-  }
-
-  /**
-   * Pause playback
+   * Pause current playback
    */
   pause(): void {
-    if (this.isPlaying && !this.isPaused) {
+    try {
       this.player.pause();
-      this.isPaused = true;
+      this.clearMonitorInterval();
       console.log("⏸️  Paused");
+    } catch (error) {
+      console.error("Failed to pause:", error);
     }
   }
 
   /**
    * Resume playback
    */
-  resume(): void {
-    if (this.isPaused) {
+  async resume(): Promise<void> {
+    if (this.data.duration > 0){
+
       this.player.play();
-      this.isPaused = false;
-      console.log("▶️  Resumed");
+      this.monitorPlayback();
+      this.log("Resume");
+      return;
+    }
+
+    if (this.tracks.length > 0) {
+      await this.playCurrentTrack();
     }
   }
 
   /**
-   * Stop playback
+   * Stop playback and reset to beginning
    */
-  stop(): void {
-    if (this.isPlaying) {
+  async stop(): Promise<void> {
+    this.isStopping = true;
+    this.clearMonitorInterval();
+
+    try {
       this.player.stop();
-      this.isPlaying = false;
-      this.isPaused = false;
-      console.log("⏹️  Stopped");
+    } catch (error) {
+      console.error({error});
     }
+
+    this.currentTrackIndex = 0;
   }
 
   /**
-   * Play next track
+   * Skip current track immediately
    */
-  async next(): Promise<void> {
-    if (this.tracks.length === 0) return;
+  async skip(): Promise<void> {
+    await this.stop();
+    await this.nextTrack();
+  }
 
-    let nextIndex: number;
+  /**
+   * Remove track from playlist
+   */
+  removeTrack(index: number): Track | null {
+    if (index < 0 || index >= this.tracks.length) {
+      return null;
+    }
 
-    if (this.shuffle) {
-      // Random index
-      nextIndex = Math.floor(Math.random() * this.tracks.length);
-    } else {
-      nextIndex = this.currentIndex + 1;
-      if (nextIndex >= this.tracks.length) {
-        if (this.loop === "all") {
-          nextIndex = 0;
-        } else {
-          console.log("🏁 End of playlist");
-          return;
-        }
+    const removed = this.tracks.splice(index, 1)[0];
+    this.songs.splice(index, 1);
+
+    if (index < this.currentTrackIndex) {
+      this.currentTrackIndex--;
+    } else if (index === this.currentTrackIndex) {
+      this.stop();
+      if (
+        this.tracks.length > 0 &&
+        this.currentTrackIndex >= this.tracks.length
+      ) {
+        this.currentTrackIndex = Math.max(0, this.tracks.length - 1);
       }
     }
 
-    await this.play(nextIndex);
+    console.log(
+      {removed: removed, currentTrackIndex: this.currentTrackIndex, tracksLength: this.tracks.length}
+    );
+    return removed || null;
   }
 
   /**
-   * Play previous track
+   * Set looping mode
    */
-  async previous(): Promise<void> {
-    if (this.tracks.length === 0) return;
-
-    let prevIndex = this.currentIndex - 1;
-    if (prevIndex < 0) {
-      if (this.loop === "all") {
-        prevIndex = this.tracks.length - 1;
-      } else {
-        console.log("⏮️  Already at start");
-        return;
-      }
-    }
-
-    await this.play(prevIndex);
-  }
-
-  /**
-   * Set loop mode
-   */
-  setLoop(mode: "none" | "all" | "one"): void {
-    this.loop = mode;
-    console.log(`🔁 Loop mode set to: ${mode}`);
-  }
-
-  /**
-   * Toggle shuffle
-   */
-  setShuffle(enabled: boolean): void {
-    this.shuffle = enabled;
-    console.log(`🔀 Shuffle ${enabled ? "ON" : "OFF"}`);
+  setLoop(enabled: boolean): void {
+    this.loop = enabled;
+    console.log({loop: this.loop});
   }
 
   /**
@@ -306,356 +329,262 @@ class Playlist {
    */
   setVolume(volume: number): void {
     if (volume < 0 || volume > 1) {
-      throw new Error("Volume must be between 0.0 and 1.0");
+      this.warn("Volume must be between 0.0 and 1.0");
+      return;
     }
-    this.volume = volume;
     this.player.setVolume(volume);
-    console.log(`🔊 Volume: ${(volume * 100).toFixed(0)}%`);
+    console.log({volume});
+  }
+
+  /**
+   * Seek to a specific position in the current track (percentage 0.0-1.0)
+   */
+  async seek(position: number): Promise<void> {
+    if (this.tracks.length === 0) {
+      this.warn("No tracks to seek in");
+      return;
+    }
+
+    const duration = this.player.getDuration();
+    if (duration <= 0) {
+      this.warn("Duration is 0, cannot seek");
+      return;
+    }
+
+    // position is a percentage (0.0 to 1.0)
+    const seekPosition = position;
+    if (seekPosition < 0 || seekPosition > 1) {
+      this.warn("Seek percentage must be between 0.0 and 1.0", { position });
+      return;
+    }
+
+    const seekTime = duration * seekPosition;
+    try {
+      this.player.seekTo(Math.round(seekTime));
+      console.log(`✅ Seeked to ${seekTime.toFixed(2)}s / ${duration.toFixed(2)}s (${(seekPosition * 100).toFixed(1)}%)`);
+    } catch (error) {
+      console.error({error});
+    }
+  }
+
+  /**
+   * Seek to a specific time in seconds
+   */
+  async seekSeconds(seconds: number): Promise<void> {
+    if (this.tracks.length === 0) {
+      this.warn("No tracks to seek in");
+      return;
+    }
+
+    const duration = this.player.getDuration();
+    if (duration <= 0) {
+      this.warn("Duration is 0, cannot seek");
+      return;
+    }
+
+    if (seconds < 0 || seconds > duration) {
+      this.warn("Seek seconds must be between 0 and duration", { seconds, duration });
+      return;
+    }
+
+    try {
+      this.player.seekTo(Math.round(seconds));
+      console.log(`✅ Seeked to ${seconds.toFixed(2)}s / ${duration.toFixed(2)}s`);
+    } catch (error) {
+      console.error({error});
+    }
+  }
+
+  /**
+   * Get current playback position in seconds
+   */
+  getCurrentTime(): number {
+    return this.player.getCurrentTime();
+  }
+
+  /**
+   * Get total duration in seconds
+   */
+  getDuration(): number {
+    return this.player.getDuration();
+  }
+
+  /**
+   * Get playback progress (0.0 to 1.0)
+   */
+  getProgress(): number {
+    const duration = this.getDuration();
+    if (duration <= 0) return 0;
+    return this.getCurrentTime() / duration;
+  }
+
+  /**
+   * Save playback state to storage
+   */
+  async saveState(storage: { set: (key: string, value: any) => Promise<void> }, key: string): Promise<void> {
+    const state = {
+      currentTrackIndex: this.currentTrackIndex,
+      currentTime: this.getCurrentTime(),
+      volume: this.getVolume(),
+      loop: this.loop,
+      timestamp: Date.now(),
+    };
+    await storage.set(key, state);
+    console.log("📁 State saved:", state);
+  }
+
+  /**
+   * Load playback state from storage
+   */
+  async loadState(storage: { get: <T>(key: string) => Promise<T | null> }, key: string): Promise<boolean> {
+    const state = await storage.get<{
+      currentTrackIndex: number;
+      currentTime: number;
+      volume: number;
+      loop: boolean;
+      timestamp: number;
+    }>(key);
+    
+    if (!state) {
+      console.log("No saved state found");
+      return false;
+    }
+    
+    // Restore state
+    this.currentTrackIndex = state.currentTrackIndex;
+    this.setVolume(state.volume);
+    this.loop = state.loop;
+    
+    console.log("📁 State loaded:", state);
+    
+    // Seek to saved position if it was recent (within 1 hour)
+    const hoursSinceSave = (Date.now() - state.timestamp) / (1000 * 60 * 60);
+    if (hoursSinceSave < 1 && this.tracks.length > 0) {
+      await this.goToTrack(state.currentTrackIndex);
+      if (state.currentTime > 0) {
+        // Wait for track to load, then seek
+        setTimeout(async () => {
+          await this.seekSeconds(state.currentTime);
+        }, 200);
+      }
+      return true;
+    }
+    
+    return false;
   }
 
   /**
    * Get volume
    */
   getVolume(): number {
-    return this.volume;
+    return this.player.getVolume();
   }
 
   /**
-   * Get current track position
+   * Get current track index
    */
-  getPlaybackTime(): {
-    current: number;
-    total: number;
-    percent: number;
-  } | null {
-    const track = this.getCurrentTrack();
-    if (!track) return null;
-
-    const current = this.player.getCurrentTime();
-    const total = track.duration;
-    const percent = total > 0 ? (current / total) * 100 : 0;
-
-    return { current, total, percent };
+  getCurrentIndex(): number {
+    return this.currentTrackIndex;
   }
 
   /**
-   * Check if playing
+   * Get total tracks
    */
-  isCurrentlyPlaying(): boolean {
-    return this.isPlaying && !this.isPaused;
-  }
-
-  /**
-   * Check if paused
-   */
-  isCurrentlyPaused(): boolean {
-    return this.isPaused;
+  getTotalTracks(): number {
+    return this.tracks.length;
   }
 
   /**
    * Get playlist status
    */
   getStatus() {
-    const current = this.getCurrentTrack();
+    const currentTrack = this.tracks[this.currentTrackIndex];
     return {
-      tracks: this.tracks.length,
-      currentIndex: this.currentIndex,
-      currentTrack: current?.name || null,
-      currentPath: current?.path || null,
-      isPlaying: this.isPlaying,
-      isPaused: this.isPaused,
-      volume: this.volume,
+      totalTracks: this.tracks.length,
+      currentTrack: this.currentTrackIndex + 1,
+      currentTrackPath:
+        typeof currentTrack === "string" ? currentTrack : "Buffer",
       loop: this.loop,
-      shuffle: this.shuffle,
-      totalDuration: this.getTotalDuration(),
+      volume: this.player.getVolume(),
+      isStopping: this.isStopping,
     };
   }
 
   /**
-   * Print playlist info
+   * Event handlers
    */
-  printPlaylist(): void {
-    console.log("\n📋 Playlist:");
-    console.log("=".repeat(60));
-
-    if (this.tracks.length === 0) {
-      console.log("   (empty)");
-      return;
+  on(
+    event: TrackEvents.TRACK_START,
+    callback: (track: Track, index: number) => void,
+  ): void;
+  on(
+    event: TrackEvents.TRACK_END,
+    callback: (
+      track: Track,
+      index: number,
+      reason: TrackEndReason,
+    ) => void,
+  ): void;
+  on(event: TrackEvents.PLAYLIST_END, callback: () => void): void;
+  on(event: string, callback: any): void {
+    switch (event) {
+      case TrackEvents.TRACK_START:
+        this.onTrackStart = callback;
+        break;
+      case TrackEvents.TRACK_END:
+        this.onTrackEnd = callback;
+        break;
+      case TrackEvents.PLAYLIST_END:
+        this.onPlaylistEnd = callback;
+        break;
     }
-
-    this.tracks.forEach((track, index) => {
-      const prefix = index === this.currentIndex ? "▶️  " : "    ";
-      const playerStatus =
-        index === this.currentIndex && this.isPlaying ? "[Playing] " : "";
-      const duration = track.duration.toFixed(2);
-      console.log(
-        `${prefix}${index + 1}. ${playerStatus}${track.name} (${duration}s)`,
-      );
-    });
-
-    console.log("=".repeat(60));
-    console.log(
-      `Total: ${this.tracks.length} tracks, ${this.getTotalDuration().toFixed(2)}s`,
-    );
   }
 
   /**
-   * Monitor playback progress
+   * Remove event handlers
    */
-  private setupAutoAdvance(): void {
-    // For single track playback with auto-next
-    // This is a simplified version
-  }
-
-  private setupAutoAdvanceOne(): void {
-    // For looping single track
-    // This is a simplified version
+  removeListener(event: TrackEvents): void {
+    switch (event) {
+      case TrackEvents.TRACK_START:
+        this.onTrackStart = undefined;
+        break;
+      case TrackEvents.TRACK_END:
+        this.onTrackEnd = undefined;
+        break;
+      case TrackEvents.PLAYLIST_END:
+        this.onPlaylistEnd = undefined;
+        break;
+    }
   }
 
   /**
-   * Clean up resources
+   * Cleanup resources - call this when done using the playlist
    */
-  dispose(): void {
-    this.stop();
-    this.player = null as any;
+  async dispose(): Promise<void> {
+    await this.stop();
+    this.clearMonitorInterval();
+    this.tracks = [];
+    this.songs = [];
+    this.onTrackStart = undefined;
+    this.onTrackEnd = undefined;
+    this.onPlaylistEnd = undefined;
+    console.log("Playlist disposed");
   }
-}
-
-/**
- * Helper function to get audio files from a directory
- */
-function getAudioFiles(directory: string): string[] {
-  const fs = require("node:fs");
-  const path = require("node:fs").path;
-
-  const supportedFormats = new Set(
-    getSupportedFormats().map((f) => f.toLowerCase()),
-  );
-  const audioFiles: string[] = [];
-
-  try {
-    const items = fs.readdirSync(directory);
-    for (const item of items) {
-      const fullPath = path.join(directory, item);
-      const stat = fs.statSync(fullPath);
-
-      if (stat.isFile()) {
-        const ext = path.extname(item).toLowerCase().slice(1);
-        if (supportedFormats.has(ext)) {
-          audioFiles.push(fullPath);
-        }
-      }
-    }
-  } catch (error) {
-    console.error(`Failed to scan directory: ${directory}`);
-  }
-
-  return audioFiles;
-}
-
-/**
- * Demonstrate playlist functionality
- */
-async function demonstratePlaylist(): Promise<void> {
-  console.log("🎵 Playlist Example with TypeScript and Bun");
-  console.log("=".repeat(60));
-
-  // Create playlist with configuration
-  console.log("\n🎧 Creating playlist...");
-  const playlist = new Playlist({ volume: 0.8 });
-
-  // Get platform-specific audio files
-  const audioFiles = getPlatformAudioFiles();
-
-  if (audioFiles.length === 0) {
-    console.log("\n⚠️  No audio files found for this platform.");
-    console.log("   You can test by providing a directory path as argument:");
-    console.log(
-      "   bun ./examples/typescript/playlist.ts /path/to/audio/files",
-    );
-
-    // Check if directory provided as argument
-    const directory = process.argv[2];
-    if (directory) {
-      console.log(`\n🔍 Scanning directory: ${directory}`);
-      const files = getAudioFiles(directory);
-
-      if (files.length > 0) {
-        await playlist.addTracks(files);
-        playlist.printPlaylist();
-        await runPlaylistDemo(playlist);
-      } else {
-        console.log("❌ No audio files found in directory");
-      }
-    }
-    return;
-  }
-
-  // Add files to playlist
-  await playlist.addTracks(audioFiles);
-  playlist.printPlaylist();
-
-  // Run demo playback
-  await runPlaylistDemo(playlist);
-
-  // Clean up
-  playlist.dispose();
-}
-
-/**
- * Run playlist demo with controls
- */
-async function runPlaylistDemo(playlist: Playlist): Promise<void> {
-  if (playlist.getTracks().length === 0) {
-    return;
-  }
-
-  console.log("\n🎯 Starting playlist demo...");
-  console.log("=".repeat(60));
-
-  try {
-    // Play first track
-    await playlist.play(0);
-    console.log("   Playing first track...");
-
-    // Wait a bit, then show controls
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-
-    // Control 1: Adjust volume
-    console.log("\n🔉 Adjusting volume...");
-    playlist.setVolume(0.5);
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-
-    // Control 2: Pause
-    console.log("\n⏸️  Pausing playback...");
-    playlist.pause();
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-
-    // Control 3: Resume
-    console.log("\n▶️  Resuming playback...");
-    playlist.resume();
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-
-    // Control 4: Volume up
-    console.log("\n🔊 Increasing volume...");
-    playlist.setVolume(1.0);
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-
-    // Control 5: Next track (if available)
-    if (playlist.getTracks().length > 1) {
-      console.log("\n⏭️  Moving to next track...");
-      await playlist.next();
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-    }
-
-    // Control 6: Previous track
-    if (playlist.getTracks().length > 1) {
-      console.log("\n⏮️  Moving to previous track...");
-      await playlist.previous();
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-    }
-
-    // Control 7: Set shuffle
-    console.log("\n🔀 Enabling shuffle...");
-    playlist.setShuffle(true);
-    await new Promise((resolve) => setTimeout(resolve, 500));
-
-    // Control 8: Set loop mode
-    console.log("\n🔁 Setting loop to 'all'...");
-    playlist.setLoop("all");
-    await new Promise((resolve) => setTimeout(resolve, 500));
-
-    // Control 9: Show status
-    console.log("\n📊 Playlist Status:");
-    console.log(playlist.getStatus());
-    playlist.printPlaylist();
-
-    // Control 10: Stop
-    console.log("\n⏹️  Stopping playback...");
-    playlist.stop();
-
-    console.log("\n✅ Playlist demo completed!");
-    console.log("\n💡 Commands demonstrated:");
-    console.log("  ✓ Play specific track");
-    console.log("  ✓ Adjust volume");
-    console.log("  ✓ Pause and resume");
-    console.log("  ✓ Next and previous tracks");
-    console.log("  ✓ Shuffle mode");
-    console.log("  ✓ Loop modes");
-    console.log("  ✓ Status and playlist display");
-  } catch (error) {
-    console.error("❌ Playlist demo error:", (error as Error).message);
-  }
-}
-
-/**
- * Get platform-specific audio files
- */
-function getPlatformAudioFiles(): string[] {
-  const fs = require("node:fs");
-  const platform = process.platform;
-  const files: string[] = [];
-
-  if (platform === "win32") {
-    const sounds = [
-      "C:/Windows/Media/tada.wav",
-      "C:/Windows/Media/chimes.wav",
-      "C:/Windows/Media/notify.wav",
-    ];
-    for (const sound of sounds) {
-      if (fs.existsSync(sound)) files.push(sound);
-    }
-  } else if (platform === "darwin") {
-    const sounds = [
-      "/System/Library/Sounds/Glass.aiff",
-      "/System/Library/Sounds/Guir.aiff",
-      "/System/Library/Sounds/Sosumi.aiff",
-    ];
-    for (const sound of sounds) {
-      if (fs.existsSync(sound)) files.push(sound);
-    }
-  } else if (platform === "linux") {
-    const soundDirs = [
-      "/usr/share/sounds/alsa",
-      "/usr/share/sounds/gnome/default",
-      "/usr/share/sounds/ubuntu",
-    ];
-    for (const dir of soundDirs) {
-      if (fs.existsSync(dir)) {
-        try {
-          const items = fs.readdirSync(dir);
-          items.forEach((item: string) => {
-            const fullPath = `${dir}/${item}`;
-            if (fs.statSync(fullPath).isFile()) {
-              files.push(fullPath);
-            }
-          });
-        } catch (e) {}
-        if (files.length > 0) break;
-      }
+  get data(){
+    const currentTime = this.player.getCurrentTime();
+    const duration = this.player.getDuration();
+    const volume = this.player.getVolume();
+    const isPlaying = this.player.isPlaying();
+    const state = this.player.getState();
+    const currentTrack = this.player.getCurrentFile();
+    return {
+      isPlaying,
+      currentTime,
+      duration,
+      progress: currentTime / duration,
+      volume,
+      state,
+      currentTrack
     }
   }
-
-  return files.slice(0, 5); // Limit to 5 files for demo
 }
-
-/**
- * Main function
- */
-async function runPlaylistExample(): Promise<void> {
-  try {
-    // Note: initializeAudio() is not needed for playlist since AudioPlayer handles it internally
-    await demonstratePlaylist();
-  } catch (error) {
-    console.error("\n❌ Fatal error:", (error as Error).message);
-    console.error((error as Error).stack);
-    process.exit(1);
-  }
-}
-
-// Run if this is the main module
-if (import.meta.main) {
-  runPlaylistExample();
-}
-
-export { Playlist, runPlaylistExample };

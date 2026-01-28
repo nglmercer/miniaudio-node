@@ -137,3 +137,4 @@ native/package.json
 native/index.js
 package-lock.json
 bun.lock
+*.json
