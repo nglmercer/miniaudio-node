@@ -132,10 +132,8 @@ mod tests {
     // Tests for seek_to function fixes
     #[test]
     fn test_seek_position_validation_nan() {
-        use std::f64::NAN;
-
         // Test NaN position should return error
-        let result = NAN.is_nan();
+        let result = f64::NAN.is_nan();
         assert!(result);
     }
 
@@ -246,10 +244,8 @@ mod tests {
 
     #[test]
     fn test_seek_to_validates_nan_position() {
-        use std::f64::NAN;
-
         // NaN should be detected
-        assert!(NAN.is_nan());
+        assert!(f64::NAN.is_nan());
     }
 
     #[test]
@@ -269,7 +265,8 @@ mod tests {
         for &pos in &test_positions {
             // Should be able to convert to nanoseconds without issues
             let ns = (pos * 1_000_000_000.0) as u128;
-            assert!(ns >= 0);
+            // u128 is always >= 0, so no need to assert
+            assert!(ns > 0 || pos == 0.0);
 
             // Should be able to convert back (approximately)
             let back_to_seconds = ns as f64 / 1_000_000_000.0;
