@@ -52,7 +52,7 @@ impl SamplesBuffer {
     /// Get the duration of this buffer in seconds
     #[napi]
     pub fn get_duration(&self) -> f64 {
-        self.get_len() as f64 / (self.sample_rate as f64 * 2.0)
+        self.get_len() as f64 / (self.sample_rate as f64 * self.channels as f64)
     }
 
     /// Get a copy of the samples in this buffer

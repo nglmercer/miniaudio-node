@@ -44,6 +44,15 @@ export declare class AudioPlayer {
   seekTo(position: number): void
 }
 
+export declare class AudioRecorder {
+  constructor()
+  start(deviceId?: string | undefined | null): void
+  stop(): void
+  isRecording(): boolean
+  getBuffer(): SamplesBuffer
+  clear(): void
+}
+
 /** A queue for managing multiple audio sources that play in sequence */
 export declare class AudioSourceQueue {
   constructor()
@@ -337,6 +346,7 @@ export declare class WhiteUniformNoise {
 export interface AudioDeviceInfo {
   id: string
   name: string
+  host: string
   isDefault: boolean
 }
 
@@ -406,6 +416,10 @@ export declare const enum DevicesError {
 export declare function getAudioInfo(): string
 
 export declare function getAudioMetadata(filePath: string): AudioMetadata
+
+export declare function getAvailableHosts(): Array<string>
+
+export declare function getInputDevices(): Array<AudioDeviceInfo>
 
 export declare function getSupportedFormats(): Array<string>
 

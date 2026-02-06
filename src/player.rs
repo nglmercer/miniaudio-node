@@ -81,6 +81,7 @@ impl AudioPlayer {
         Ok(vec![AudioDeviceInfo {
             id: "default".to_string(),
             name: "Default Output Device".to_string(),
+            host: "default".to_string(),
             is_default: true,
         }])
     }

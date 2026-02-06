@@ -21,6 +21,7 @@ pub type OutputDevices = Vec<AudioDeviceInfo>;
 pub struct AudioDeviceInfo {
     pub id: String,
     pub name: String,
+    pub host: String,
     pub is_default: bool,
 }
 

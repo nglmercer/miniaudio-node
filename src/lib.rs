@@ -7,6 +7,7 @@
 pub mod buffer;
 pub mod conversions;
 pub mod decoder;
+pub mod input;
 pub mod math;
 pub mod mixer;
 pub mod noise;
@@ -20,6 +21,7 @@ pub mod utils;
 pub use buffer::*;
 pub use conversions::*;
 pub use decoder::*;
+pub use input::*;
 pub use math::*;
 pub use mixer::*;
 pub use noise::*;
