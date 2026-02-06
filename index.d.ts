@@ -46,6 +46,7 @@ export declare class AudioPlayer {
 
 export declare class AudioRecorder {
   constructor()
+  setOnData(callback: ((err: Error | null, arg: Array<number>) => any)): void
   setRingBufferSize(sizeSamples: number): void
   start(deviceId?: string | undefined | null): void
   stop(): void
@@ -53,6 +54,8 @@ export declare class AudioRecorder {
   getBuffer(): SamplesBuffer
   getRingBufferSamples(): Array<number>
   clear(): void
+  getConfig(): RecorderConfig
+  getLevels(): AudioLevels
 }
 
 /** A queue for managing multiple audio sources that play in sequence */
@@ -357,6 +360,11 @@ export interface AudioHostInfo {
   name: string
 }
 
+export interface AudioLevels {
+  peak: number
+  rms: number
+}
+
 export interface AudioMetadata {
   duration: number
   title?: string
@@ -489,6 +497,12 @@ export declare const enum PlayError {
 export declare function queue(): AudioSourceQueue
 
 export declare function quickPlay(filePath: string, config?: AudioPlayerConfig | undefined | null): AudioPlayer
+
+export interface RecorderConfig {
+  sampleRate: number
+  channels: number
+  sampleFormat: string
+}
 
 /** Parameters for sample rate conversion */
 export interface SampleRateConversion {

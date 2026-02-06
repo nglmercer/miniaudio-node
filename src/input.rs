@@ -6,11 +6,25 @@ use napi::{Error, Result, Status};
 use napi_derive::napi;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+type OnDataCallback = Box<dyn Fn(Vec<i16>) + Send + Sync>;
 
 #[napi(object)]
 pub struct AudioHostInfo {
     pub id: String,
     pub name: String,
+}
+
+#[napi(object)]
+pub struct RecorderConfig {
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub sample_format: String,
+}
+
+#[napi(object)]
+pub struct AudioLevels {
+    pub peak: f64,
+    pub rms: f64,
 }
 
 #[napi]
@@ -32,40 +46,53 @@ pub fn get_available_hosts() -> Vec<AudioHostInfo> {
         .collect()
 }
 
+fn create_device_info(
+    host_name: &str,
+    index: usize,
+    device: &cpal::Device,
+    default_name: &Option<String>,
+) -> Option<AudioDeviceInfo> {
+    let name = device.description().ok()?.name().to_string();
+    // Only include devices that actually have a default input config
+    if device.default_input_config().is_err() {
+        return None;
+    }
+
+    Some(AudioDeviceInfo {
+        id: format!("{}:{}", host_name, index),
+        name: name.clone(),
+        host: host_name.to_string(),
+        is_default: Some(name) == *default_name,
+    })
+}
+
 #[napi]
 pub fn get_input_devices_by_host(host_name: String) -> Result<Vec<AudioDeviceInfo>> {
     let host_id = cpal::available_hosts()
         .into_iter()
         .find(|h| format!("{:?}", h) == host_name)
-        .ok_or_else(|| Error::new(Status::InvalidArg, "Host not found"))?;
+        .ok_or_else(|| {
+            Error::new(
+                Status::InvalidArg,
+                format!("Host '{}' not found", host_name),
+            )
+        })?;
 
     let host = cpal::host_from_id(host_id)
         .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
 
-    let mut result = Vec::new();
     let devices = host
         .input_devices()
         .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
 
-    let default_device = host.default_input_device();
-    let default_name =
-        default_device.and_then(|d| d.description().ok().map(|desc| desc.name().to_string()));
+    let default_name = host
+        .default_input_device()
+        .and_then(|d| d.description().ok().map(|desc| desc.name().to_string()));
 
-    for (i, device) in devices.enumerate() {
-        if let Ok(description) = device.description() {
-            if device.default_input_config().is_err() {
-                continue;
-            }
-
-            let name = description.name();
-            result.push(AudioDeviceInfo {
-                id: format!("{}:{}", host_name, i),
-                name: name.to_string(),
-                host: host_name.clone(),
-                is_default: Some(name.to_string()) == default_name,
-            });
-        }
-    }
+    let result = devices
+        .enumerate()
+        .filter_map(|(i, device)| create_device_info(&host_name, i, &device, &default_name))
+        .collect();
 
     Ok(result)
 }
@@ -87,25 +114,13 @@ pub fn get_input_devices() -> Result<Vec<AudioDeviceInfo>> {
             Err(_) => continue,
         };
 
-        let default_device = host.default_input_device();
-        let default_name =
-            default_device.and_then(|d| d.description().ok().map(|desc| desc.name().to_string()));
+        let default_name = host
+            .default_input_device()
+            .and_then(|d| d.description().ok().map(|desc| desc.name().to_string()));
 
         for (i, device) in devices.enumerate() {
-            if let Ok(description) = device.description() {
-                // Only include devices that actually have a default input config
-                if device.default_input_config().is_err() {
-                    continue;
-                }
-
-                let name = description.name();
-                result.push(AudioDeviceInfo {
-                    // Unique ID across hosts
-                    id: format!("{}:{}", host_name, i),
-                    name: name.to_string(),
-                    host: host_name.clone(),
-                    is_default: Some(name.to_string()) == default_name,
-                });
+            if let Some(info) = create_device_info(&host_name, i, &device, &default_name) {
+                result.push(info);
             }
         }
     }
@@ -115,20 +130,12 @@ pub fn get_input_devices() -> Result<Vec<AudioDeviceInfo>> {
         let host = cpal::default_host();
         let host_name = format!("{:?}", host.id());
         if let Ok(devices) = host.input_devices() {
+            let default_name = host
+                .default_input_device()
+                .and_then(|d| d.description().ok().map(|desc| desc.name().to_string()));
             for (i, device) in devices.enumerate() {
-                if let Ok(description) = device.description() {
-                    // Filter unusable devices in fallback too
-                    if device.default_input_config().is_err() {
-                        continue;
-                    }
-
-                    let name = description.name();
-                    result.push(AudioDeviceInfo {
-                        id: format!("{}:{}", host_name, i),
-                        name: name.to_string(),
-                        host: host_name.clone(),
-                        is_default: true, // simplified
-                    });
+                if let Some(info) = create_device_info(&host_name, i, &device, &default_name) {
+                    result.push(info);
                 }
             }
         }
@@ -142,15 +149,23 @@ pub struct AudioRecorder {
     stream: Option<cpal::Stream>,
     recorded_samples: Arc<Mutex<Vec<i16>>>, // Full history
     ring_buffer: Arc<Mutex<Option<ringbuf::HeapRb<i16>>>>, // Ring buffer for continuous recording
-    on_data_callback: Arc<Mutex<Option<ThreadsafeFunction<Vec<i16>>>>>,
+    on_data_callback: Arc<Mutex<Option<OnDataCallback>>>,
     is_recording: Arc<AtomicBool>,
     sample_rate: u32,
     channels: u16,
+    last_peak: Arc<Mutex<f64>>,
+    last_rms: Arc<Mutex<f64>>,
 }
 
 impl Default for AudioRecorder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Drop for AudioRecorder {
+    fn drop(&mut self) {
+        let _ = self.stop();
     }
 }
 
@@ -166,15 +181,23 @@ impl AudioRecorder {
             is_recording: Arc::new(AtomicBool::new(false)),
             sample_rate: 44100,
             channels: 1,
+            last_peak: Arc::new(Mutex::new(0.0)),
+            last_rms: Arc::new(Mutex::new(0.0)),
         }
     }
 
-    // #[napi]
-    // pub fn set_on_data(&self, callback: Function) -> Result<()> {
-    //     let tsfn: ThreadsafeFunction<Vec<i16>> = callback.build_threadsafe_function().build()?;
-    //     *self.on_data_callback.lock().unwrap() = Some(tsfn);
-    //     Ok(())
-    // }
+    #[napi]
+    pub fn set_on_data(&self, callback: ThreadsafeFunction<Vec<i16>>) -> Result<()> {
+        let cb = Box::new(move |data: Vec<i16>| {
+            callback.call(
+                Ok::<_, Error>(data),
+                ThreadsafeFunctionCallMode::NonBlocking,
+            );
+        });
+
+        *self.on_data_callback.lock().unwrap() = Some(cb);
+        Ok(())
+    }
 
     #[napi]
     pub fn set_ring_buffer_size(&self, size_samples: u32) {
@@ -192,44 +215,56 @@ impl AudioRecorder {
             ));
         }
 
-        // Parse host and index from ID (Format: "Host:Index")
-        let (_host, device) = if let Some(id) = device_id {
+        let host = cpal::default_host();
+        let device = if let Some(id) = device_id {
             if id.contains(':') {
                 let parts: Vec<&str> = id.split(':').collect();
                 let host_name = parts[0];
-                let device_idx = parts[1].parse::<usize>().unwrap_or(0);
+                let device_idx = parts[1].parse::<usize>().map_err(|_| {
+                    Error::new(
+                        Status::InvalidArg,
+                        format!("Invalid device index in ID: {}", id),
+                    )
+                })?;
 
                 let host_id = cpal::available_hosts()
                     .into_iter()
                     .find(|h| format!("{:?}", h) == host_name)
-                    .ok_or_else(|| Error::new(Status::InvalidArg, "Host not found"))?;
+                    .ok_or_else(|| {
+                        Error::new(
+                            Status::InvalidArg,
+                            format!("Host '{}' not found", host_name),
+                        )
+                    })?;
 
                 let host = cpal::host_from_id(host_id)
                     .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
 
-                let device = host
-                    .input_devices()
+                host.input_devices()
                     .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?
                     .nth(device_idx)
-                    .ok_or_else(|| Error::new(Status::InvalidArg, "Device not found"))?;
-
-                (host, device)
+                    .ok_or_else(|| {
+                        Error::new(
+                            Status::InvalidArg,
+                            format!(
+                                "Device at index {} not found on host {}",
+                                device_idx, host_name
+                            ),
+                        )
+                    })?
             } else {
-                // Fallback for old numeric IDs
-                let host = cpal::default_host();
-                let device = host
-                    .input_devices()
+                // Fallback for old numeric IDs or simple IDs
+                host.input_devices()
                     .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?
                     .nth(id.parse::<usize>().unwrap_or(0))
-                    .ok_or_else(|| Error::new(Status::InvalidArg, "Device not found"))?;
-                (host, device)
+                    .ok_or_else(|| {
+                        Error::new(Status::InvalidArg, format!("Device ID {} not found", id))
+                    })?
             }
         } else {
-            let host = cpal::default_host();
-            let device = host
-                .default_input_device()
-                .ok_or_else(|| Error::new(Status::GenericFailure, "No default input device"))?;
-            (host, device)
+            host.default_input_device().ok_or_else(|| {
+                Error::new(Status::GenericFailure, "No default input device available")
+            })?
         };
 
         let config = device.default_input_config().map_err(|e| {
@@ -240,16 +275,16 @@ impl AudioRecorder {
         })?;
 
         self.sample_rate = config.sample_rate();
-
         self.channels = config.channels();
 
         let recorded_samples = self.recorded_samples.clone();
         let ring_buffer = self.ring_buffer.clone();
         let on_data = self.on_data_callback.clone();
         let is_recording = self.is_recording.clone();
+        let last_peak = self.last_peak.clone();
+        let last_rms = self.last_rms.clone();
 
-        // Clear and pre-reserve memory to avoid reallocations in the audio callback.
-        // We reserve for 10 seconds of audio by default.
+        // Reserve for 10 seconds of audio by default.
         {
             let mut samples = recorded_samples.lock().unwrap();
             samples.clear();
@@ -258,20 +293,15 @@ impl AudioRecorder {
         }
 
         let err_fn = move |err| {
-            eprintln!("an error occurred on stream: {}", err);
+            eprintln!("Audio stream error: {}", err);
         };
 
         let mut stream_config: cpal::StreamConfig = config.clone().into();
-
-        // Linux ALSA dynamic buffer sizes can cause "hissing" or crackling.
-        // Following user advice: Try Default, but if Fixed(1024) is within supported range,
-        // it's often more stable on Linux.
         stream_config.buffer_size = cpal::BufferSize::Default;
 
         #[cfg(target_os = "linux")]
         {
             if let cpal::SupportedBufferSize::Range { min, max } = config.buffer_size() {
-                // 1024 or 512 are typically good for stability.
                 let preferred = 1024;
                 if preferred >= *min && preferred <= *max {
                     stream_config.buffer_size = cpal::BufferSize::Fixed(preferred);
@@ -279,41 +309,62 @@ impl AudioRecorder {
             }
         }
 
+        let process_samples = move |data: &[i16]| {
+            if is_recording.load(Ordering::SeqCst) {
+                // Calculate stats
+                let mut peak: f32 = 0.0;
+                let mut sum_sq: f64 = 0.0;
+                for &s in data {
+                    let val = (s as f32 / 32768.0).abs();
+                    if val > peak {
+                        peak = val;
+                    }
+                    sum_sq += (val * val) as f64;
+                }
+
+                {
+                    *last_peak.lock().unwrap() = peak as f64;
+                    if !data.is_empty() {
+                        *last_rms.lock().unwrap() = (sum_sq / data.len() as f64).sqrt();
+                    }
+                }
+
+                // Fill full history
+                {
+                    let mut samples = recorded_samples.lock().unwrap();
+                    samples.extend_from_slice(data);
+                }
+
+                // Fill ring buffer
+                {
+                    let mut rb_guard = ring_buffer.lock().unwrap();
+                    if let Some(rb) = rb_guard.as_mut() {
+                        use ringbuf::traits::Producer;
+                        let _ = rb.push_slice(data);
+                    }
+                }
+
+                // Emit callback
+                {
+                    let callback_guard = on_data.lock().unwrap();
+                    if let Some(cb) = callback_guard.as_ref() {
+                        cb(data.to_vec());
+                    }
+                }
+            }
+        };
+
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => device.build_input_stream(
                 &stream_config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    if is_recording.load(Ordering::SeqCst) {
-                        let i16_samples: Vec<i16> = data
-                            .iter()
-                            .map(|&sample| {
-                                (sample * 32768.0).clamp(i16::MIN as f32, i16::MAX as f32) as i16
-                            })
-                            .collect();
-
-                        // Fill full history
-                        {
-                            let mut samples = recorded_samples.lock().unwrap();
-                            samples.extend_from_slice(&i16_samples);
-                        }
-
-                        // Fill ring buffer
-                        {
-                            let mut rb_guard = ring_buffer.lock().unwrap();
-                            if let Some(rb) = rb_guard.as_mut() {
-                                use ringbuf::traits::Producer;
-                                let _ = rb.push_slice(&i16_samples);
-                            }
-                        }
-
-                        // Emit callback
-                        {
-                            let callback_guard = on_data.lock().unwrap();
-                            if let Some(tsfn) = callback_guard.as_ref() {
-                                tsfn.call(Ok(i16_samples), ThreadsafeFunctionCallMode::NonBlocking);
-                            }
-                        }
-                    }
+                    let i16_samples: Vec<i16> = data
+                        .iter()
+                        .map(|&sample| {
+                            (sample * 32768.0).clamp(i16::MIN as f32, i16::MAX as f32) as i16
+                        })
+                        .collect();
+                    process_samples(&i16_samples);
                 },
                 err_fn,
                 None,
@@ -321,32 +372,17 @@ impl AudioRecorder {
             cpal::SampleFormat::I16 => device.build_input_stream(
                 &stream_config,
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                    if is_recording.load(Ordering::SeqCst) {
-                        let _samples_vec = data.to_vec();
-
-                        // Fill full history
-                        {
-                            let mut samples = recorded_samples.lock().unwrap();
-                            samples.extend_from_slice(data);
-                        }
-
-                        // Fill ring buffer
-                        {
-                            let mut rb_guard = ring_buffer.lock().unwrap();
-                            if let Some(rb) = rb_guard.as_mut() {
-                                use ringbuf::traits::Producer;
-                                let _ = rb.push_slice(data);
-                            }
-                        }
-
-                        // Emit callback
-                        // {
-                        //     let callback_guard = on_data.lock().unwrap();
-                        //     if let Some(tsfn) = callback_guard.as_ref() {
-                        //         let _ = tsfn.call(Ok(samples_vec), ThreadsafeFunctionCallMode::NonBlocking);
-                        //     }
-                        // }
-                    }
+                    process_samples(data);
+                },
+                err_fn,
+                None,
+            ),
+            cpal::SampleFormat::I8 => device.build_input_stream(
+                &stream_config,
+                move |data: &[i8], _: &cpal::InputCallbackInfo| {
+                    let i16_samples: Vec<i16> =
+                        data.iter().map(|&sample| (sample as i16) << 8).collect();
+                    process_samples(&i16_samples);
                 },
                 err_fn,
                 None,
@@ -354,35 +390,11 @@ impl AudioRecorder {
             cpal::SampleFormat::U16 => device.build_input_stream(
                 &stream_config,
                 move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                    if is_recording.load(Ordering::SeqCst) {
-                        let i16_samples: Vec<i16> = data
-                            .iter()
-                            .map(|&sample| (sample as i32 - 32768) as i16)
-                            .collect();
-
-                        // Fill full history
-                        {
-                            let mut samples = recorded_samples.lock().unwrap();
-                            samples.extend_from_slice(&i16_samples);
-                        }
-
-                        // Fill ring buffer
-                        {
-                            let mut rb_guard = ring_buffer.lock().unwrap();
-                            if let Some(rb) = rb_guard.as_mut() {
-                                use ringbuf::traits::Producer;
-                                let _ = rb.push_slice(&i16_samples);
-                            }
-                        }
-
-                        // Emit callback
-                        {
-                            let callback_guard = on_data.lock().unwrap();
-                            if let Some(tsfn) = callback_guard.as_ref() {
-                                tsfn.call(Ok(i16_samples), ThreadsafeFunctionCallMode::NonBlocking);
-                            }
-                        }
-                    }
+                    let i16_samples: Vec<i16> = data
+                        .iter()
+                        .map(|&sample| (sample as i32 - 32768) as i16)
+                        .collect();
+                    process_samples(&i16_samples);
                 },
                 err_fn,
                 None,
@@ -397,14 +409,14 @@ impl AudioRecorder {
         .map_err(|e| {
             Error::new(
                 Status::GenericFailure,
-                format!("Failed to build input stream for device: {}", e),
+                format!("Failed to build input stream: {}", e),
             )
         })?;
 
         stream.play().map_err(|e| {
             Error::new(
                 Status::GenericFailure,
-                format!("Failed to activate input stream: {}", e),
+                format!("Failed to start input stream: {}", e),
             )
         })?;
 
@@ -421,7 +433,7 @@ impl AudioRecorder {
         }
 
         self.is_recording.store(false, Ordering::SeqCst);
-        self.stream = None; // Dropping the stream stops recording
+        self.stream = None;
 
         Ok(())
     }
@@ -446,7 +458,6 @@ impl AudioRecorder {
         use ringbuf::traits::Consumer;
         let mut rb_guard = self.ring_buffer.lock().unwrap();
         if let Some(rb) = rb_guard.as_mut() {
-            // Pop as many as we have
             let samples: Vec<i16> = rb.pop_iter().collect();
             Ok(samples)
         } else {
@@ -457,5 +468,22 @@ impl AudioRecorder {
     #[napi]
     pub fn clear(&mut self) {
         self.recorded_samples.lock().unwrap().clear();
+    }
+
+    #[napi]
+    pub fn get_config(&self) -> RecorderConfig {
+        RecorderConfig {
+            sample_rate: self.sample_rate,
+            channels: self.channels,
+            sample_format: "i16".to_string(), // We normalize everything to i16
+        }
+    }
+
+    #[napi]
+    pub fn get_levels(&self) -> AudioLevels {
+        AudioLevels {
+            peak: *self.last_peak.lock().unwrap(),
+            rms: *self.last_rms.lock().unwrap(),
+        }
     }
 }
