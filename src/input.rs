@@ -1,17 +1,73 @@
 use crate::buffer::SamplesBuffer;
 use crate::types::AudioDeviceInfo;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+#[napi(object)]
+pub struct AudioHostInfo {
+    pub id: String,
+    pub name: String,
+}
+
 #[napi]
-pub fn get_available_hosts() -> Vec<String> {
+pub fn get_available_hosts() -> Vec<AudioHostInfo> {
     cpal::available_hosts()
         .iter()
-        .map(|h| format!("{:?}", h))
+        .map(|h| {
+            let id = format!("{:?}", h);
+            let name = match id.to_lowercase().as_str() {
+                "alsa" => "ALSA (Linux Standard)".to_string(),
+                "jack" => "JACK (Professional Audio)".to_string(),
+                "asio" => "ASIO (Windows Pro Audio)".to_string(),
+                "wasapi" => "WASAPI (Windows Standard)".to_string(),
+                "coreaudio" => "CoreAudio (macOS Standard)".to_string(),
+                _ => id.clone(),
+            };
+            AudioHostInfo { id, name }
+        })
         .collect()
+}
+
+#[napi]
+pub fn get_input_devices_by_host(host_name: String) -> Result<Vec<AudioDeviceInfo>> {
+    let host_id = cpal::available_hosts()
+        .into_iter()
+        .find(|h| format!("{:?}", h) == host_name)
+        .ok_or_else(|| Error::new(Status::InvalidArg, "Host not found"))?;
+
+    let host = cpal::host_from_id(host_id)
+        .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
+
+    let mut result = Vec::new();
+    let devices = host
+        .input_devices()
+        .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
+
+    let default_device = host.default_input_device();
+    let default_name =
+        default_device.and_then(|d| d.description().ok().map(|desc| desc.name().to_string()));
+
+    for (i, device) in devices.enumerate() {
+        if let Ok(description) = device.description() {
+            if device.default_input_config().is_err() {
+                continue;
+            }
+
+            let name = description.name();
+            result.push(AudioDeviceInfo {
+                id: format!("{}:{}", host_name, i),
+                name: name.to_string(),
+                host: host_name.clone(),
+                is_default: Some(name.to_string()) == default_name,
+            });
+        }
+    }
+
+    Ok(result)
 }
 
 #[napi]
@@ -84,7 +140,9 @@ pub fn get_input_devices() -> Result<Vec<AudioDeviceInfo>> {
 #[napi]
 pub struct AudioRecorder {
     stream: Option<cpal::Stream>,
-    recorded_samples: Arc<Mutex<Vec<i16>>>,
+    recorded_samples: Arc<Mutex<Vec<i16>>>, // Full history
+    ring_buffer: Arc<Mutex<Option<ringbuf::HeapRb<i16>>>>, // Ring buffer for continuous recording
+    on_data_callback: Arc<Mutex<Option<ThreadsafeFunction<Vec<i16>>>>>,
     is_recording: Arc<AtomicBool>,
     sample_rate: u32,
     channels: u16,
@@ -103,10 +161,26 @@ impl AudioRecorder {
         Self {
             stream: None,
             recorded_samples: Arc::new(Mutex::new(Vec::new())),
+            ring_buffer: Arc::new(Mutex::new(None)),
+            on_data_callback: Arc::new(Mutex::new(None)),
             is_recording: Arc::new(AtomicBool::new(false)),
             sample_rate: 44100,
             channels: 1,
         }
+    }
+
+    // #[napi]
+    // pub fn set_on_data(&self, callback: Function) -> Result<()> {
+    //     let tsfn: ThreadsafeFunction<Vec<i16>> = callback.build_threadsafe_function().build()?;
+    //     *self.on_data_callback.lock().unwrap() = Some(tsfn);
+    //     Ok(())
+    // }
+
+    #[napi]
+    pub fn set_ring_buffer_size(&self, size_samples: u32) {
+        use ringbuf::HeapRb;
+        let rb = HeapRb::<i16>::new(size_samples as usize);
+        *self.ring_buffer.lock().unwrap() = Some(rb);
     }
 
     #[napi]
@@ -170,6 +244,8 @@ impl AudioRecorder {
         self.channels = config.channels();
 
         let recorded_samples = self.recorded_samples.clone();
+        let ring_buffer = self.ring_buffer.clone();
+        let on_data = self.on_data_callback.clone();
         let is_recording = self.is_recording.clone();
 
         // Clear and pre-reserve memory to avoid reallocations in the audio callback.
@@ -208,12 +284,34 @@ impl AudioRecorder {
                 &stream_config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     if is_recording.load(Ordering::SeqCst) {
-                        let mut samples = recorded_samples.lock().unwrap();
-                        for &sample in data {
-                            // Standard F32 to I16 conversion with saturation clamping
-                            let s =
-                                (sample * 32768.0).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
-                            samples.push(s);
+                        let i16_samples: Vec<i16> = data
+                            .iter()
+                            .map(|&sample| {
+                                (sample * 32768.0).clamp(i16::MIN as f32, i16::MAX as f32) as i16
+                            })
+                            .collect();
+
+                        // Fill full history
+                        {
+                            let mut samples = recorded_samples.lock().unwrap();
+                            samples.extend_from_slice(&i16_samples);
+                        }
+
+                        // Fill ring buffer
+                        {
+                            let mut rb_guard = ring_buffer.lock().unwrap();
+                            if let Some(rb) = rb_guard.as_mut() {
+                                use ringbuf::traits::Producer;
+                                let _ = rb.push_slice(&i16_samples);
+                            }
+                        }
+
+                        // Emit callback
+                        {
+                            let callback_guard = on_data.lock().unwrap();
+                            if let Some(tsfn) = callback_guard.as_ref() {
+                                tsfn.call(Ok(i16_samples), ThreadsafeFunctionCallMode::NonBlocking);
+                            }
                         }
                     }
                 },
@@ -224,8 +322,30 @@ impl AudioRecorder {
                 &stream_config,
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
                     if is_recording.load(Ordering::SeqCst) {
-                        let mut samples = recorded_samples.lock().unwrap();
-                        samples.extend_from_slice(data);
+                        let _samples_vec = data.to_vec();
+
+                        // Fill full history
+                        {
+                            let mut samples = recorded_samples.lock().unwrap();
+                            samples.extend_from_slice(data);
+                        }
+
+                        // Fill ring buffer
+                        {
+                            let mut rb_guard = ring_buffer.lock().unwrap();
+                            if let Some(rb) = rb_guard.as_mut() {
+                                use ringbuf::traits::Producer;
+                                let _ = rb.push_slice(data);
+                            }
+                        }
+
+                        // Emit callback
+                        // {
+                        //     let callback_guard = on_data.lock().unwrap();
+                        //     if let Some(tsfn) = callback_guard.as_ref() {
+                        //         let _ = tsfn.call(Ok(samples_vec), ThreadsafeFunctionCallMode::NonBlocking);
+                        //     }
+                        // }
                     }
                 },
                 err_fn,
@@ -235,11 +355,32 @@ impl AudioRecorder {
                 &stream_config,
                 move |data: &[u16], _: &cpal::InputCallbackInfo| {
                     if is_recording.load(Ordering::SeqCst) {
-                        let mut samples = recorded_samples.lock().unwrap();
-                        for &sample in data {
-                            // Convert u16 to i16 (32768 is the center for u16)
-                            let s = (sample as i32 - 32768) as i16;
-                            samples.push(s);
+                        let i16_samples: Vec<i16> = data
+                            .iter()
+                            .map(|&sample| (sample as i32 - 32768) as i16)
+                            .collect();
+
+                        // Fill full history
+                        {
+                            let mut samples = recorded_samples.lock().unwrap();
+                            samples.extend_from_slice(&i16_samples);
+                        }
+
+                        // Fill ring buffer
+                        {
+                            let mut rb_guard = ring_buffer.lock().unwrap();
+                            if let Some(rb) = rb_guard.as_mut() {
+                                use ringbuf::traits::Producer;
+                                let _ = rb.push_slice(&i16_samples);
+                            }
+                        }
+
+                        // Emit callback
+                        {
+                            let callback_guard = on_data.lock().unwrap();
+                            if let Some(tsfn) = callback_guard.as_ref() {
+                                tsfn.call(Ok(i16_samples), ThreadsafeFunctionCallMode::NonBlocking);
+                            }
                         }
                     }
                 },
@@ -298,6 +439,19 @@ impl AudioRecorder {
             self.sample_rate,
             samples,
         ))
+    }
+
+    #[napi]
+    pub fn get_ring_buffer_samples(&self) -> Result<Vec<i16>> {
+        use ringbuf::traits::Consumer;
+        let mut rb_guard = self.ring_buffer.lock().unwrap();
+        if let Some(rb) = rb_guard.as_mut() {
+            // Pop as many as we have
+            let samples: Vec<i16> = rb.pop_iter().collect();
+            Ok(samples)
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     #[napi]

@@ -46,10 +46,12 @@ export declare class AudioPlayer {
 
 export declare class AudioRecorder {
   constructor()
+  setRingBufferSize(sizeSamples: number): void
   start(deviceId?: string | undefined | null): void
   stop(): void
   isRecording(): boolean
   getBuffer(): SamplesBuffer
+  getRingBufferSamples(): Array<number>
   clear(): void
 }
 
@@ -350,6 +352,11 @@ export interface AudioDeviceInfo {
   isDefault: boolean
 }
 
+export interface AudioHostInfo {
+  id: string
+  name: string
+}
+
 export interface AudioMetadata {
   duration: number
   title?: string
@@ -417,9 +424,11 @@ export declare function getAudioInfo(): string
 
 export declare function getAudioMetadata(filePath: string): AudioMetadata
 
-export declare function getAvailableHosts(): Array<string>
+export declare function getAvailableHosts(): Array<AudioHostInfo>
 
 export declare function getInputDevices(): Array<AudioDeviceInfo>
+
+export declare function getInputDevicesByHost(hostName: string): Array<AudioDeviceInfo>
 
 export declare function getSupportedFormats(): Array<string>
 
