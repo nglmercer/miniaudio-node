@@ -1,6 +1,6 @@
 import { getInputDevices, AudioRecorder } from "../index.js";
 import { writeFileSync } from "fs";
-
+import { toWav } from "./utils/audio.js";
 // ANSI colors for better UI
 const colors = {
   reset: "\x1b[0m",
@@ -10,65 +10,6 @@ const colors = {
   yellow: "\x1b[33m",
   red: "\x1b[31m",
 };
-
-/**
- * Saves PCM samples to a WAV file
- */
-function toWav(samples: number[] | Int16Array, sampleRate: number, channels: number) {
-  const bitsPerSample = 16;
-  const numSamples = samples.length;
-  const dataSize = numSamples * 2;
-  const chunkSize = 36 + dataSize;
-
-  const header = Buffer.alloc(44);
-  
-  // RIFF header
-  header.write("RIFF", 0);
-  header.writeUInt32LE(chunkSize, 4);
-  header.write("WAVE", 8);
-
-  // fmt chunk
-  header.write("fmt ", 12);
-  header.writeUInt32LE(16, 16); // subchunk1size
-  header.writeUInt16LE(1, 20); // audio format (PCM)
-  header.writeUInt16LE(channels, 22);
-  header.writeUInt32LE(sampleRate, 24);
-  header.writeUInt32LE(sampleRate * channels * 2, 28); // byte rate
-  header.writeUInt16LE(channels * 2, 32); // block align
-  header.writeUInt16LE(bitsPerSample, 34);
-
-  // data chunk
-  header.write("data", 36);
-  header.writeUInt32LE(dataSize, 40);
-
-  // Convert samples to Buffer with explicit Little Endian if needed
-  // Using a DataView or writing to Buffer directly is safest
-  const dataBuffer = Buffer.alloc(dataSize);
-  for (let i = 0; i < numSamples; i++) {
-    dataBuffer.writeInt16LE(samples[i], i * 2);
-  }
-
-  const finalBuffer = Buffer.concat([header, dataBuffer]);
-  // Audio quality check
-  let max = 0;
-  let min = 0;
-  let sumSq = 0;
-  for (let i = 0; i < numSamples; i++) {
-    const s = samples[i];
-    if (s > max) max = s;
-    if (s < min) min = s;
-    sumSq += s * s;
-  }
-  const rms = Math.sqrt(sumSq / numSamples);
-  const peakDb = 20 * Math.log10(Math.max(Math.abs(max), Math.abs(min)) / 32768);
-
-  console.log(`${colors.yellow}Audio Stats: Peak: ${peakDb.toFixed(1)} dB, RMS: ${(20 * Math.log10(rms / 32768)).toFixed(1)} dB${colors.reset}`);
-  
-  if (max === 0 && min === 0) {
-    console.warn(`${colors.red}WARNING: The recording is total SILENCE (all zeros)!${colors.reset}`);
-  }
-  return finalBuffer
-}
 
 async function main() {
   console.log(`${colors.bright}${colors.cyan}--- Audio Recorder Console ---${colors.reset}\n`);
