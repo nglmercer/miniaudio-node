@@ -7,6 +7,11 @@
  * Example: bun examples/audio-passthrough-stream.ts null null 20
  */
 
+// ==================== CONFIGURATION ====================
+// Set to true to show available input/output devices on startup
+const SHOW_DEVICES = false;
+// ========================================================
+
 import { AudioPassthrough } from "../index.js";
 import {
   createLevelBar,
@@ -19,24 +24,36 @@ import {
 const POLL_INTERVAL_MS = 20;
 const BAR_WIDTH = 5;
 
+/**
+ * Helper function to log devices in a clean way
+ * Controlled by the SHOW_DEVICES constant at the top
+ */
+function logDevices(inputDevices: any[], outputDevices: any[]) {
+  if (!SHOW_DEVICES) return;
+  
+  console.log(`${colors.bright}Available Input Devices:${colors.reset}`);
+  inputDevices.forEach((dev, index) => {
+    const defaultTag = dev.isDefault ? ` ${colors.yellow}[DEFAULT]${colors.reset}` : "";
+    console.log(`  ${colors.green}${index + 1}.${colors.reset} ${dev.name}${defaultTag}`);
+    console.log(`      ${colors.gray}ID: ${dev.id} | Host: ${dev.host}${colors.reset}`);
+  });
+  
+  console.log(`\n${colors.bright}Available Output Devices:${colors.reset}`);
+  outputDevices.forEach((dev, index) => {
+    const defaultTag = dev.isDefault ? ` ${colors.yellow}[DEFAULT]${colors.reset}` : "";
+    console.log(`  ${colors.green}${index + 1}.${colors.reset} ${dev.name}${defaultTag}`);
+    console.log(`      ${colors.gray}ID: ${dev.id} | Host: ${dev.host}${colors.reset}`);
+  });
+  console.log();
+}
+
 async function main() {
   // Get available devices
   const inputDevices = AudioPassthrough.getInputDevices();
   const outputDevices = AudioPassthrough.getOutputDevices();
   
-  //console.log(`${colors.bright}Available Input Devices:${colors.reset}`);
-  inputDevices.forEach((dev, index) => {
-    const defaultTag = dev.isDefault ? ` ${colors.yellow}[DEFAULT]${colors.reset}` : "";
-    //console.log(`  ${colors.green}${index + 1}.${colors.reset} ${dev.name}${defaultTag}`);
-    //console.log(`      ${colors.gray}ID: ${dev.id} | Host: ${dev.host}${colors.reset}`);
-  });
-  
-  //console.log(`\n${colors.bright}Available Output Devices:${colors.reset}`);
-  outputDevices.forEach((dev, index) => {
-    const defaultTag = dev.isDefault ? ` ${colors.yellow}[DEFAULT]${colors.reset}` : "";
-    //console.log(`  ${colors.green}${index + 1}.${colors.reset} ${dev.name}${defaultTag}`);
-    //console.log(`      ${colors.gray}ID: ${dev.id} | Host: ${dev.host}${colors.reset}`);
-  });
+  // Show devices if enabled (controlled by SHOW_DEVICES constant)
+  logDevices(inputDevices, outputDevices);
   
   console.log(`\n${colors.gray}Usage:${colors.reset}`);
   console.log(`  bun examples/audio-passthrough-stream.ts [input-id] [output-id] [latency-ms]`);
@@ -57,15 +74,12 @@ async function main() {
   if (args[2]) {
     latencyMs = parseInt(args[2], 10) || 20;
   }
-
-  console.log(`${inputId ? `Input: ${inputId}` : 'Using default input device'}`);
-  console.log(`${outputId ? `Output: ${outputId}` : 'Using default output device'}`);
-  console.log(`Latency: ${latencyMs}ms\n`);
-
-  console.log(`${colors.yellow}Starting real-time passthrough...${colors.reset}`);
-  console.log(`${colors.yellow}Press Ctrl+C to stop${colors.reset}\n`);
-
   const passthrough = new AudioPassthrough();
+  console.log({
+    outputId,
+    inputId,
+    latencyMs
+  })
   
   try {
     passthrough.start(inputId, outputId, latencyMs);
