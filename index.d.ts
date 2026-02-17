@@ -24,6 +24,40 @@ export declare class AudioDecoder {
   isMono(): boolean
 }
 
+/**
+ * Real-time audio passthrough (loopback) from input to output
+ * Uses a ring buffer to transfer audio data between input and output streams
+ * with minimal latency
+ */
+export declare class AudioPassthrough {
+  constructor()
+  /** Set callback for audio level updates (peak, RMS) */
+  setOnLevels(callback: ((err: Error | null, arg: AudioLevels) => any)): void
+  /**
+   * Start the audio passthrough
+   *
+   * # Arguments
+   * * `input_device_id` - Input device ID (e.g., "Alsa:13") or None for default
+   * * `output_device_id` - Output device ID or None for default
+   * * `latency_ms` - Target latency in milliseconds (default: 20)
+   */
+  start(inputDeviceId?: string | undefined | null, outputDeviceId?: string | undefined | null, latencyMs?: number | undefined | null): void
+  /** Stop the audio passthrough */
+  stop(): void
+  /** Check if passthrough is running */
+  isRunning(): boolean
+  /** Get current audio levels */
+  getLevels(): AudioLevels
+  /** Get the current sample rate */
+  getSampleRate(): number
+  /** Get the current channel count */
+  getChannels(): number
+  /** Get available input devices */
+  static getInputDevices(): Array<AudioDeviceInfo>
+  /** Get available output devices */
+  static getOutputDevices(): Array<AudioDeviceInfo>
+}
+
 /** Thread-safe audio player with rodio backend */
 export declare class AudioPlayer {
   constructor()
@@ -536,6 +570,16 @@ export declare const enum SourceFunction {
   PinkNoise = 'PinkNoise',
   BrownNoise = 'BrownNoise'
 }
+
+/**
+ * Simple audio passthrough with minimal configuration
+ *
+ * # Arguments
+ * * `input_device` - Input device ID (e.g., "Alsa:13") or null for default
+ * * `output_device` - Output device ID or null for default
+ * * `latency_ms` - Target latency in milliseconds
+ */
+export declare function startPassthrough(inputDevice?: string | undefined | null, outputDevice?: string | undefined | null, latencyMs?: number | undefined | null): AudioPassthrough
 
 /** Error types for stream operations */
 export declare const enum StreamError {

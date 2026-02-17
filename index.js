@@ -577,6 +577,7 @@ if (!nativeBinding) {
 
 module.exports = nativeBinding
 module.exports.AudioDecoder = nativeBinding.AudioDecoder
+module.exports.AudioPassthrough = nativeBinding.AudioPassthrough
 module.exports.AudioPlayer = nativeBinding.AudioPlayer
 module.exports.AudioRecorder = nativeBinding.AudioRecorder
 module.exports.AudioSourceQueue = nativeBinding.AudioSourceQueue
@@ -626,6 +627,7 @@ module.exports.quickPlay = nativeBinding.quickPlay
 module.exports.SeekError = nativeBinding.SeekError
 module.exports.setDebug = nativeBinding.setDebug
 module.exports.SourceFunction = nativeBinding.SourceFunction
+module.exports.startPassthrough = nativeBinding.startPassthrough
 module.exports.StreamError = nativeBinding.StreamError
 module.exports.StreamPlayError = nativeBinding.StreamPlayError
 module.exports.supportedOutputConfigs = nativeBinding.supportedOutputConfigs

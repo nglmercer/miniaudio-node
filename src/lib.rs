@@ -4,6 +4,7 @@
 #![allow(clippy::arc_with_non_send_sync)]
 
 // Declare the top-level modules
+pub mod audio_passthrough;
 pub mod buffer;
 pub mod conversions;
 pub mod decoder;
@@ -18,6 +19,7 @@ pub mod types;
 pub mod utils;
 
 // Re-export all the contents at the crate root level for flat NAPI export
+pub use audio_passthrough::*;
 pub use buffer::*;
 pub use conversions::*;
 pub use decoder::*;
