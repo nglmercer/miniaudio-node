@@ -14,7 +14,7 @@ const colors = {
 /**
  * Saves PCM samples to a WAV file
  */
-function saveWav(filename: string, samples: number[] | Int16Array, sampleRate: number, channels: number) {
+function toWav(samples: number[] | Int16Array, sampleRate: number, channels: number) {
   const bitsPerSample = 16;
   const numSamples = samples.length;
   const dataSize = numSamples * 2;
@@ -49,8 +49,6 @@ function saveWav(filename: string, samples: number[] | Int16Array, sampleRate: n
   }
 
   const finalBuffer = Buffer.concat([header, dataBuffer]);
-  writeFileSync(filename, finalBuffer);
-
   // Audio quality check
   let max = 0;
   let min = 0;
@@ -64,12 +62,12 @@ function saveWav(filename: string, samples: number[] | Int16Array, sampleRate: n
   const rms = Math.sqrt(sumSq / numSamples);
   const peakDb = 20 * Math.log10(Math.max(Math.abs(max), Math.abs(min)) / 32768);
 
-  console.log(`${colors.cyan}Saved ${numSamples} samples to ${filename}${colors.reset}`);
   console.log(`${colors.yellow}Audio Stats: Peak: ${peakDb.toFixed(1)} dB, RMS: ${(20 * Math.log10(rms / 32768)).toFixed(1)} dB${colors.reset}`);
   
   if (max === 0 && min === 0) {
     console.warn(`${colors.red}WARNING: The recording is total SILENCE (all zeros)!${colors.reset}`);
   }
+  return finalBuffer
 }
 
 async function main() {
@@ -132,7 +130,9 @@ async function main() {
   console.log(`  - Total Samples: ${colors.cyan}${samples.length}${colors.reset}`);
 
   if (samples.length > 0) {
-    saveWav("recording.wav", samples, sampleRate, channels);
+    const buffer = toWav(samples, sampleRate, channels);
+    writeFileSync("recording.wav", buffer);
+
     console.log(`\n${colors.bright}${colors.green}SUCCESS: File "recording.wav" is ready!${colors.reset}\n`);
   } else {
     console.log(`\n${colors.red}ERROR: No samples were captured. Check your microphone settings.${colors.reset}\n`);
