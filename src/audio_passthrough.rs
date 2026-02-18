@@ -105,17 +105,17 @@ impl AudioPassthrough {
 
         // Get input device
         let host = cpal::default_host();
-        
+
         // Try to find a real input device if no specific device requested
-        let input_device = if input_device_id.as_ref().map_or(false, |s| !s.is_empty()) {
+        let input_device = if input_device_id.as_ref().is_some_and(|s| !s.is_empty()) {
             self.get_input_device(&host, input_device_id.as_deref())?
         } else {
             // Find first real input device (not virtual)
-            let mut found_device = None;
+            let found_device = None;
             if let Ok(devices) = host.input_devices() {
                 for device in devices {
                     if let Ok(desc) = device.description() {
-                        let name = desc.name().to_lowercase();
+                        let _name = desc.name().to_lowercase();
                     }
                 }
             }
@@ -128,7 +128,10 @@ impl AudioPassthrough {
 
         // Get input config
         let input_config = input_device.default_input_config().map_err(|e| {
-            Error::new(Status::GenericFailure, format!("Failed to get input config: {}", e))
+            Error::new(
+                Status::GenericFailure,
+                format!("Failed to get input config: {}", e),
+            )
         })?;
 
         self.sample_rate = input_config.sample_rate();
@@ -144,8 +147,7 @@ impl AudioPassthrough {
 
         // Create ring buffer - size based on latency
         // At 44100 Hz with 2 channels, we need ~1764 samples per 20ms
-        let samples_per_buffer =
-            (self.sample_rate * self.channels as u32 * target_latency) / 1000;
+        let samples_per_buffer = (self.sample_rate * self.channels as u32 * target_latency) / 1000;
         let buffer_size = samples_per_buffer * 4; // 4x for safety margin
         let ring = HeapRb::<f32>::new(buffer_size as usize);
 
@@ -184,8 +186,7 @@ impl AudioPassthrough {
                 &stream_config,
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
                     if is_running.load(Ordering::SeqCst) {
-                        let f32_data: Vec<f32> =
-                            data.iter().map(|&s| s as f32 / 32768.0).collect();
+                        let f32_data: Vec<f32> = data.iter().map(|&s| s as f32 / 32768.0).collect();
                         process_input_data(
                             &f32_data,
                             &ring_buffer,
@@ -202,8 +203,7 @@ impl AudioPassthrough {
                 &stream_config,
                 move |data: &[i8], _: &cpal::InputCallbackInfo| {
                     if is_running.load(Ordering::SeqCst) {
-                        let f32_data: Vec<f32> =
-                            data.iter().map(|&s| (s as f32) / 128.0).collect();
+                        let f32_data: Vec<f32> = data.iter().map(|&s| (s as f32) / 128.0).collect();
                         process_input_data(
                             &f32_data,
                             &ring_buffer,
@@ -247,7 +247,10 @@ impl AudioPassthrough {
             }
         }
         .map_err(|e| {
-            Error::new(Status::GenericFailure, format!("Failed to build input stream: {}", e))
+            Error::new(
+                Status::GenericFailure,
+                format!("Failed to build input stream: {}", e),
+            )
         })?;
 
         // Clone for output stream
@@ -288,17 +291,26 @@ impl AudioPassthrough {
                 None,
             )
             .map_err(|e| {
-                Error::new(Status::GenericFailure, format!("Failed to build output stream: {}", e))
+                Error::new(
+                    Status::GenericFailure,
+                    format!("Failed to build output stream: {}", e),
+                )
             })?;
 
         // Start both streams
-        input_stream
-            .play()
-            .map_err(|e| Error::new(Status::GenericFailure, format!("Failed to start input stream: {}", e)))?;
+        input_stream.play().map_err(|e| {
+            Error::new(
+                Status::GenericFailure,
+                format!("Failed to start input stream: {}", e),
+            )
+        })?;
 
-        output_stream
-            .play()
-            .map_err(|e| Error::new(Status::GenericFailure, format!("Failed to start output stream: {}", e)))?;
+        output_stream.play().map_err(|e| {
+            Error::new(
+                Status::GenericFailure,
+                format!("Failed to start output stream: {}", e),
+            )
+        })?;
 
         self.input_stream = Some(input_stream);
         self.output_stream = Some(output_stream);
@@ -367,7 +379,7 @@ impl AudioPassthrough {
     pub fn get_output_devices() -> Result<Vec<crate::types::AudioDeviceInfo>> {
         let mut result = Vec::new();
         let host = cpal::default_host();
-        
+
         // Get the default output device for comparison
         let default_device = host.default_output_device();
 
@@ -382,13 +394,9 @@ impl AudioPassthrough {
                     }
 
                     // Check if this is the default device
-                    let is_default = default_device
-                        .as_ref()
-                        .map_or(false, |d| {
-                            d.description()
-                                .map(|dd| dd.name() == name)
-                                .unwrap_or(false)
-                        });
+                    let is_default = default_device.as_ref().is_some_and(|d| {
+                        d.description().map(|dd| dd.name() == name).unwrap_or(false)
+                    });
 
                     result.push(crate::types::AudioDeviceInfo {
                         id: format!("{}:{}", host.id(), i),
@@ -404,11 +412,7 @@ impl AudioPassthrough {
     }
 
     // Helper to get input device
-    fn get_input_device(
-        &self,
-        host: &cpal::Host,
-        device_id: Option<&str>,
-    ) -> Result<cpal::Device> {
+    fn get_input_device(&self, host: &cpal::Host, device_id: Option<&str>) -> Result<cpal::Device> {
         match device_id {
             Some(id) => {
                 if id.contains(':') {
@@ -428,8 +432,8 @@ impl AudioPassthrough {
                             )
                         })?;
 
-                    let host =
-                        cpal::host_from_id(host_id).map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
+                    let host = cpal::host_from_id(host_id)
+                        .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
 
                     host.input_devices()
                         .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?
@@ -480,8 +484,8 @@ impl AudioPassthrough {
                             )
                         })?;
 
-                    let host =
-                        cpal::host_from_id(host_id).map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
+                    let host = cpal::host_from_id(host_id)
+                        .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
 
                     host.output_devices()
                         .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?
