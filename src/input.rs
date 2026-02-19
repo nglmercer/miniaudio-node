@@ -8,6 +8,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 type OnDataCallback = Box<dyn Fn(Vec<i16>) + Send + Sync>;
 
+const DEFAULT_SAMPLE_RATE: u32 = 44100;
+const DEFAULT_CHANNELS: u16 = 1;
+const DEFAULT_RESERVE_SECONDS: u32 = 10;
+const DEVICE_ID_SEPARATOR: char = ':';
+const I16_MAX_F32: f32 = 32768.0;
+const PREFERRED_LINUX_BUFFER_SIZE: u32 = 1024;
+
 #[napi(object)]
 pub struct AudioHostInfo {
     pub id: String,
@@ -59,7 +66,7 @@ fn create_device_info(
     }
 
     Some(AudioDeviceInfo {
-        id: format!("{}:{}", host_name, index),
+        id: format!("{}{}{}", host_name, DEVICE_ID_SEPARATOR, index),
         name: name.clone(),
         host: host_name.to_string(),
         is_default: Some(name) == *default_name,
@@ -179,8 +186,8 @@ impl AudioRecorder {
             ring_buffer: Arc::new(Mutex::new(None)),
             on_data_callback: Arc::new(Mutex::new(None)),
             is_recording: Arc::new(AtomicBool::new(false)),
-            sample_rate: 44100,
-            channels: 1,
+            sample_rate: DEFAULT_SAMPLE_RATE,
+            channels: DEFAULT_CHANNELS,
             last_peak: Arc::new(Mutex::new(0.0)),
             last_rms: Arc::new(Mutex::new(0.0)),
         }
@@ -217,8 +224,8 @@ impl AudioRecorder {
 
         let host = cpal::default_host();
         let device = if let Some(id) = device_id {
-            if id.contains(':') {
-                let parts: Vec<&str> = id.split(':').collect();
+            if id.contains(DEVICE_ID_SEPARATOR) {
+                let parts: Vec<&str> = id.split(DEVICE_ID_SEPARATOR).collect();
                 let host_name = parts[0];
                 let device_idx = parts[1].parse::<usize>().map_err(|_| {
                     Error::new(
@@ -288,7 +295,8 @@ impl AudioRecorder {
         {
             let mut samples = recorded_samples.lock().unwrap();
             samples.clear();
-            let reserve_size = (self.sample_rate * self.channels as u32 * 10) as usize;
+            let reserve_size =
+                (self.sample_rate * self.channels as u32 * DEFAULT_RESERVE_SECONDS) as usize;
             samples.reserve(reserve_size);
         }
 
@@ -302,7 +310,7 @@ impl AudioRecorder {
         #[cfg(target_os = "linux")]
         {
             if let cpal::SupportedBufferSize::Range { min, max } = config.buffer_size() {
-                let preferred = 1024;
+                let preferred = PREFERRED_LINUX_BUFFER_SIZE;
                 if preferred >= *min && preferred <= *max {
                     stream_config.buffer_size = cpal::BufferSize::Fixed(preferred);
                 }
@@ -315,7 +323,7 @@ impl AudioRecorder {
                 let mut peak: f32 = 0.0;
                 let mut sum_sq: f64 = 0.0;
                 for &s in data {
-                    let val = (s as f32 / 32768.0).abs();
+                    let val = (s as f32 / I16_MAX_F32).abs();
                     if val > peak {
                         peak = val;
                     }
@@ -361,7 +369,7 @@ impl AudioRecorder {
                     let i16_samples: Vec<i16> = data
                         .iter()
                         .map(|&sample| {
-                            (sample * 32768.0).clamp(i16::MIN as f32, i16::MAX as f32) as i16
+                            (sample * I16_MAX_F32).clamp(i16::MIN as f32, i16::MAX as f32) as i16
                         })
                         .collect();
                     process_samples(&i16_samples);
@@ -392,7 +400,7 @@ impl AudioRecorder {
                 move |data: &[u16], _: &cpal::InputCallbackInfo| {
                     let i16_samples: Vec<i16> = data
                         .iter()
-                        .map(|&sample| (sample as i32 - 32768) as i16)
+                        .map(|&sample| (sample as i32 - I16_MAX_F32 as i32) as i16)
                         .collect();
                     process_samples(&i16_samples);
                 },

@@ -13,6 +13,13 @@ use std::sync::{Arc, Mutex};
 /// Callback type for audio level updates
 type OnLevelsCallback = Box<dyn Fn(AudioLevels) + Send + Sync>;
 
+const DEFAULT_SAMPLE_RATE: u32 = 44100;
+const DEFAULT_CHANNELS: u16 = 1;
+const DEFAULT_LATENCY_MS: u32 = 20;
+const DEVICE_ID_SEPARATOR: char = ':';
+const I16_MAX_F32: f32 = 32768.0;
+const I8_MAX_F32: f32 = 128.0;
+
 /// Real-time audio passthrough (loopback) from input to output
 /// Uses a ring buffer to transfer audio data between input and output streams
 /// with minimal latency
@@ -59,8 +66,8 @@ impl AudioPassthrough {
             output_stream: None,
             ring_buffer: Arc::new(Mutex::new(None)),
             is_running: Arc::new(AtomicBool::new(false)),
-            sample_rate: 44100,
-            channels: 1,
+            sample_rate: DEFAULT_SAMPLE_RATE,
+            channels: DEFAULT_CHANNELS,
             last_peak: Arc::new(Mutex::new(0.0)),
             last_rms: Arc::new(Mutex::new(0.0)),
             on_levels_callback: Arc::new(Mutex::new(None)),
@@ -101,7 +108,7 @@ impl AudioPassthrough {
             ));
         }
 
-        let target_latency = latency_ms.unwrap_or(20);
+        let target_latency = latency_ms.unwrap_or(DEFAULT_LATENCY_MS);
 
         // Get input device
         let host = cpal::default_host();
@@ -186,7 +193,8 @@ impl AudioPassthrough {
                 &stream_config,
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
                     if is_running.load(Ordering::SeqCst) {
-                        let f32_data: Vec<f32> = data.iter().map(|&s| s as f32 / 32768.0).collect();
+                        let f32_data: Vec<f32> =
+                            data.iter().map(|&s| s as f32 / I16_MAX_F32).collect();
                         process_input_data(
                             &f32_data,
                             &ring_buffer,
@@ -203,7 +211,8 @@ impl AudioPassthrough {
                 &stream_config,
                 move |data: &[i8], _: &cpal::InputCallbackInfo| {
                     if is_running.load(Ordering::SeqCst) {
-                        let f32_data: Vec<f32> = data.iter().map(|&s| (s as f32) / 128.0).collect();
+                        let f32_data: Vec<f32> =
+                            data.iter().map(|&s| (s as f32) / I8_MAX_F32).collect();
                         process_input_data(
                             &f32_data,
                             &ring_buffer,
@@ -222,7 +231,7 @@ impl AudioPassthrough {
                     if is_running.load(Ordering::SeqCst) {
                         let f32_data: Vec<f32> = data
                             .iter()
-                            .map(|&s| ((s as i32 - 32768) as f32) / 32768.0)
+                            .map(|&s| ((s as i32 - I16_MAX_F32 as i32) as f32) / I16_MAX_F32)
                             .collect();
                         process_input_data(
                             &f32_data,
@@ -415,8 +424,8 @@ impl AudioPassthrough {
     fn get_input_device(&self, host: &cpal::Host, device_id: Option<&str>) -> Result<cpal::Device> {
         match device_id {
             Some(id) => {
-                if id.contains(':') {
-                    let parts: Vec<&str> = id.split(':').collect();
+                if id.contains(DEVICE_ID_SEPARATOR) {
+                    let parts: Vec<&str> = id.split(DEVICE_ID_SEPARATOR).collect();
                     let host_name = parts[0];
                     let device_idx = parts[1].parse::<usize>().map_err(|_| {
                         Error::new(Status::InvalidArg, format!("Invalid device index: {}", id))
@@ -467,8 +476,8 @@ impl AudioPassthrough {
     ) -> Result<cpal::Device> {
         match device_id {
             Some(id) => {
-                if id.contains(':') {
-                    let parts: Vec<&str> = id.split(':').collect();
+                if id.contains(DEVICE_ID_SEPARATOR) {
+                    let parts: Vec<&str> = id.split(DEVICE_ID_SEPARATOR).collect();
                     let host_name = parts[0];
                     let device_idx = parts[1].parse::<usize>().map_err(|_| {
                         Error::new(Status::InvalidArg, format!("Invalid device index: {}", id))
