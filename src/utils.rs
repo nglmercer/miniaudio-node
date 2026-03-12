@@ -1,7 +1,7 @@
 use crate::types::{AudioMetadata, DEBUG_ENABLED};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
-use rodio::{OutputStreamBuilder, Sink, Source};
+use rodio::{DeviceSinkBuilder, Player, Source};
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::thread;
@@ -9,7 +9,7 @@ use std::time::Duration;
 
 #[napi]
 pub fn initialize_audio() -> Result<String> {
-    match OutputStreamBuilder::open_default_stream() {
+    match DeviceSinkBuilder::open_default_sink() {
         Ok(_stream) => Ok("Audio system initialized with rodio".to_string()),
         Err(e) => Err(Error::new(
             Status::GenericFailure,
@@ -57,7 +57,7 @@ pub fn get_audio_info() -> Result<String> {
 pub fn test_tone(frequency: f64, duration_ms: u32) -> Result<()> {
     use rodio::source::SineWave;
 
-    let stream = OutputStreamBuilder::open_default_stream().map_err(|e| {
+    let stream = DeviceSinkBuilder::open_default_sink().map_err(|e| {
         Error::new(
             Status::GenericFailure,
             format!("Failed to create stream: {}", e),
@@ -65,7 +65,7 @@ pub fn test_tone(frequency: f64, duration_ms: u32) -> Result<()> {
     })?;
 
     let mixer = stream.mixer();
-    let sink = Sink::connect_new(mixer);
+    let sink = Player::connect_new(mixer);
 
     let source = SineWave::new(frequency as f32)
         .take_duration(Duration::from_millis(duration_ms as u64))

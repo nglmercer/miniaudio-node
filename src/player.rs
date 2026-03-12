@@ -1,11 +1,29 @@
 use base64::{engine::general_purpose, Engine as _};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
-use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
+use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
 use std::fs::File;
-use std::io::{BufReader, Cursor};
+use std::io::{BufReader, Cursor, Read, Seek};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+
+// Helper function for robust decoding
+fn create_decoder<R>(data: R, extension: Option<&str>) -> Result<Decoder<R>>
+where
+    R: Read + Seek + Send + Sync + 'static,
+{
+    let mut builder = Decoder::builder().with_data(data);
+    if let Some(ext) = extension {
+        builder = builder.with_hint(ext);
+    }
+
+    builder.build().map_err(|e| {
+        Error::new(
+            Status::InvalidArg,
+            format!("Failed to create decoder: {}", e),
+        )
+    })
+}
 
 // Importamos los tipos definidos en el otro módulo
 use crate::debug_log;
@@ -18,10 +36,10 @@ pub struct AudioPlayer {
     volume: Arc<Mutex<f32>>,
     state: Arc<Mutex<PlaybackState>>,
     duration: Arc<Mutex<f64>>,
-    sink: Arc<Mutex<Option<Sink>>>,
+    sink: Arc<Mutex<Option<Player>>>,
     // OutputStream needs to be kept alive along with sink
     #[allow(dead_code)]
-    output_stream: Arc<Mutex<Option<rodio::OutputStream>>>,
+    output_stream: Arc<Mutex<Option<rodio::MixerDeviceSink>>>,
     audio_buffer: Arc<Mutex<Option<Vec<u8>>>>,
     // Track if player was ever initialized
     initialized: bool,
@@ -61,9 +79,9 @@ impl AudioPlayer {
 
         // Try to initialize the output stream and sink immediately
         // This prevents the first-play delay
-        match OutputStreamBuilder::open_default_stream() {
+        match DeviceSinkBuilder::open_default_sink() {
             Ok(stream) => {
-                let sink = Sink::connect_new(stream.mixer());
+                let sink = Player::connect_new(stream.mixer());
                 *player.output_stream.lock().unwrap() = Some(stream);
                 *player.sink.lock().unwrap() = Some(sink);
                 debug_log!("Audio stream initialized in constructor");
@@ -106,12 +124,9 @@ impl AudioPlayer {
         let file = File::open(path)
             .map_err(|e| Error::new(Status::InvalidArg, format!("Failed to open file: {}", e)))?;
         let reader = BufReader::new(file);
-        let decoder = Decoder::new(reader).map_err(|e| {
-            Error::new(
-                Status::InvalidArg,
-                format!("Failed to create decoder: {}", e),
-            )
-        })?;
+
+        let ext = path.extension().and_then(|s| s.to_str());
+        let decoder = create_decoder(reader, ext)?;
 
         // Calculate duration from decoder
         let duration_seconds = decoder
@@ -141,15 +156,12 @@ impl AudioPlayer {
         self.stop().ok();
 
         let cursor = Cursor::new(audio_data.clone());
-        let decoder = Decoder::new(cursor).map_err(|e| {
-            debug_log!("Failed to decode buffer: {}", e);
-            Error::new(
-                Status::InvalidArg,
-                format!(
-                    "Failed to decode audio buffer. The format may be unsupported or the data may be corrupted. Error: {}",
-                    e
-                ),
-            )
+
+        // For buffers, we try with common hints if automatic detection fails
+        let decoder = create_decoder(cursor.clone(), None).or_else(|_| {
+            create_decoder(cursor.clone(), Some("ogg"))
+        }).or_else(|_| {
+            create_decoder(cursor, Some("aac"))
         })?;
 
         // Calculate duration from decoder
@@ -234,7 +246,7 @@ impl AudioPlayer {
             if sink_guard.is_none() || output_stream_guard.is_none() {
                 debug_log!("Recreating output stream and sink...");
 
-                let stream = OutputStreamBuilder::open_default_stream().map_err(|e| {
+                let stream = DeviceSinkBuilder::open_default_sink().map_err(|e| {
                     debug_log!("Failed to create output stream: {}", e);
                     Error::new(
                         Status::GenericFailure,
@@ -242,7 +254,7 @@ impl AudioPlayer {
                     )
                 })?;
 
-                let sink = Sink::connect_new(stream.mixer());
+                let sink = Player::connect_new(stream.mixer());
 
                 *output_stream_guard = Some(stream);
                 *sink_guard = Some(sink);
@@ -266,17 +278,18 @@ impl AudioPlayer {
                 if let Some(buffer_data) = self.audio_buffer.lock().unwrap().clone() {
                     debug_log!("Playing from buffer ({} bytes)", buffer_data.len());
                     let cursor = Cursor::new(buffer_data);
-                    let source = Decoder::new(cursor).map_err(|e| {
-                        Error::new(
-                            Status::InvalidArg,
-                            format!("Failed to create decoder for buffer: {}", e),
-                        )
+                    let source = create_decoder(cursor.clone(), None).or_else(|_| {
+                        create_decoder(cursor.clone(), Some("ogg"))
+                    }).or_else(|_| {
+                        create_decoder(cursor, Some("aac"))
                     })?;
                     sink.append(source);
                 } else if let Some(file_path) = &self.current_file {
                     debug_log!("Playing from file: {}", file_path);
-                    let file = File::open(file_path).unwrap();
-                    let source = Decoder::new(BufReader::new(file)).unwrap();
+                    let file = File::open(file_path).map_err(|e| Error::new(Status::InvalidArg, e.to_string()))?;
+                    let reader = BufReader::new(file);
+                    let ext = Path::new(file_path).extension().and_then(|s| s.to_str());
+                    let source = create_decoder(reader, ext)?;
                     sink.append(source);
                 }
             } else {
@@ -501,7 +514,7 @@ impl AudioPlayer {
                 drop(sink_guard);
                 drop(output_stream_guard);
 
-                let stream = OutputStreamBuilder::open_default_stream().map_err(|e| {
+                let stream = DeviceSinkBuilder::open_default_sink().map_err(|e| {
                     debug_log!("Failed to create output stream for seek: {}", e);
                     Error::new(
                         Status::GenericFailure,
@@ -509,7 +522,7 @@ impl AudioPlayer {
                     )
                 })?;
 
-                let sink_new = Sink::connect_new(stream.mixer());
+                let sink_new = Player::connect_new(stream.mixer());
                 *self.output_stream.lock().unwrap() = Some(stream);
                 *self.sink.lock().unwrap() = Some(sink_new);
                 debug_log!("Output stream and sink recreated for seek");
@@ -532,12 +545,8 @@ impl AudioPlayer {
                 })?;
 
                 let reader = BufReader::new(file);
-                let decoder = Decoder::new(reader).map_err(|e| {
-                    Error::new(
-                        Status::GenericFailure,
-                        format!("Failed to create decoder: {}", e),
-                    )
-                })?;
+                let ext = path.extension().and_then(|s| s.to_str());
+                let decoder = create_decoder(reader, ext)?;
 
                 // Skip to the desired position
                 let skip_duration = std::time::Duration::from_secs_f64(position);
@@ -551,11 +560,10 @@ impl AudioPlayer {
                 let skip_bytes = ((position * bytes_per_second) as usize).min(buffer_data.len());
 
                 let cursor = Cursor::new(buffer_data[skip_bytes..].to_vec());
-                let decoder = Decoder::new(cursor).map_err(|e| {
-                    Error::new(
-                        Status::GenericFailure,
-                        format!("Failed to create decoder: {}", e),
-                    )
+                let decoder = create_decoder(cursor.clone(), None).or_else(|_| {
+                    create_decoder(cursor.clone(), Some("ogg"))
+                }).or_else(|_| {
+                    create_decoder(cursor, Some("aac"))
                 })?;
 
                 sink.append(decoder);

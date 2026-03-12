@@ -4,7 +4,7 @@ use crate::buffer::SamplesBuffer;
 use crate::types::{PlayError, SupportedStreamConfig};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
-use rodio::{OutputStream, OutputStreamBuilder, Sink, Source as RodioSource};
+use rodio::{MixerDeviceSink, DeviceSinkBuilder, Player, Source as RodioSource};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
@@ -14,8 +14,8 @@ use std::time::Duration;
 /// Audio stream for real-time playback
 #[napi]
 pub struct AudioStream {
-    sink: Arc<Mutex<Option<Sink>>>,
-    output_stream: Arc<Mutex<Option<OutputStream>>>,
+    sink: Arc<Mutex<Option<Player>>>,
+    output_stream: Arc<Mutex<Option<MixerDeviceSink>>>,
     is_playing: Arc<Mutex<bool>>,
     is_paused: Arc<Mutex<bool>>,
     volume: Arc<Mutex<f32>>,
@@ -43,7 +43,7 @@ impl AudioStream {
     /// Open and initialize the audio stream
     #[napi]
     pub fn open(&mut self) -> Result<()> {
-        let stream = OutputStreamBuilder::open_default_stream().map_err(|e| {
+        let stream = DeviceSinkBuilder::open_default_sink().map_err(|e| {
             Error::new(
                 Status::InvalidArg,
                 format!("Failed to create output stream: {}", e),
@@ -51,7 +51,7 @@ impl AudioStream {
         })?;
 
         let mixer = stream.mixer();
-        let sink = Sink::connect_new(mixer);
+        let sink = Player::connect_new(mixer);
 
         *self.output_stream.lock().unwrap() = Some(stream);
         *self.sink.lock().unwrap() = Some(sink);
@@ -344,12 +344,12 @@ fn make_source_from_vec(
             Some(self.samples.len() - self.index)
         }
 
-        fn channels(&self) -> u16 {
-            self.channels
+        fn channels(&self) -> std::num::NonZeroU16 {
+            std::num::NonZeroU16::new(self.channels).unwrap_or(std::num::NonZeroU16::new(1).unwrap())
         }
 
-        fn sample_rate(&self) -> u32 {
-            self.sample_rate
+        fn sample_rate(&self) -> std::num::NonZeroU32 {
+            std::num::NonZeroU32::new(self.sample_rate).unwrap_or(std::num::NonZeroU32::new(44100).unwrap())
         }
 
         fn total_duration(&self) -> Option<Duration> {

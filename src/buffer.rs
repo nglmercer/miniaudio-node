@@ -75,12 +75,12 @@ impl SamplesBuffer {
     /// Play this buffer with the given sink
     #[napi]
     pub fn play(&self) -> napi::Result<()> {
-        use rodio::{OutputStreamBuilder, Sink, Source};
+        use rodio::{DeviceSinkBuilder, Player, Source};
 
-        let stream = OutputStreamBuilder::open_default_stream()
+        let stream = DeviceSinkBuilder::open_default_sink()
             .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;
 
-        let sink = Sink::connect_new(stream.mixer());
+        let sink = Player::connect_new(stream.mixer());
         let samples_i16 = self.samples.lock().unwrap().clone();
 
         // Convert i16 samples to f32 for rodio
@@ -117,12 +117,12 @@ impl SamplesBuffer {
                 Some(self.samples.len() - self.index)
             }
 
-            fn channels(&self) -> u16 {
-                self.channels
+            fn channels(&self) -> std::num::NonZeroU16 {
+                std::num::NonZeroU16::new(self.channels).unwrap_or(std::num::NonZeroU16::new(1).unwrap())
             }
 
-            fn sample_rate(&self) -> u32 {
-                self.sample_rate
+            fn sample_rate(&self) -> std::num::NonZeroU32 {
+                std::num::NonZeroU32::new(self.sample_rate).unwrap_or(std::num::NonZeroU32::new(44100).unwrap())
             }
 
             fn total_duration(&self) -> Option<Duration> {

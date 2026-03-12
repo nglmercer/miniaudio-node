@@ -38,8 +38,8 @@ impl AudioDecoder {
             Error::new(Status::InvalidArg, format!("Failed to decode audio: {}", e))
         })?;
 
-        let sample_rate = source.sample_rate();
-        let channels = source.channels();
+        let sample_rate = source.sample_rate().get();
+        let channels = source.channels().get();
         let duration = source.total_duration().map_or(0.0, |d| d.as_secs_f64());
 
         Ok(Self {
@@ -65,8 +65,8 @@ impl AudioDecoder {
             )
         })?;
 
-        let sample_rate = source.sample_rate();
-        let channels = source.channels();
+        let sample_rate = source.sample_rate().get();
+        let channels = source.channels().get();
         let duration = source.total_duration().map_or(0.0, |d| d.as_secs_f64());
 
         Ok(Self {
