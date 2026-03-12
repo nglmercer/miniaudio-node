@@ -86,9 +86,25 @@ pub fn get_audio_metadata(file_path: String) -> Result<AudioMetadata> {
             format!("File not found: {}", file_path),
         ));
     }
-    // Rodio basic placeholder
+
+    let file = std::fs::File::open(path).map_err(|e| {
+        Error::new(
+            Status::GenericFailure,
+            format!("Failed to open file for metadata: {}", e),
+        )
+    })?;
+
+    let reader = std::io::BufReader::new(file);
+    let ext = path.extension().and_then(|s| s.to_str());
+    let decoder = crate::player::create_decoder(reader, ext)?;
+
+    let duration = decoder
+        .total_duration()
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+
     Ok(AudioMetadata {
-        duration: 0.0,
+        duration,
         title: None,
         artist: None,
         album: None,

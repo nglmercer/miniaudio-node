@@ -24,8 +24,9 @@ targets = [
 [dependencies]
 napi = { version = "3.8.2", features = ["napi4", "serde-json", "async"] }
 napi-derive = "3.5.1"
-rodio = { version = "0.22.2", default-features = false, features = ["playback", "symphonia-all", "symphonia-aac", "symphonia-isomp4", "symphonia-ogg", "symphonia-vorbis", "symphonia-mp3", "symphonia-flac", "symphonia-wav"] }
-symphonia = { version = "0.5.5", features = ["all"] }
+rodio = { version = "0.22.2", default-features = false, features = ["playback", "lewton", "minimp3", "symphonia-all", "symphonia-aac", "symphonia-isomp4", "symphonia-ogg", "symphonia-vorbis", "symphonia-mp3", "symphonia-flac", "symphonia-wav"] }
+symphonia = { version = "0.5.5", features = ["all", "aac", "mp3", "isomp4", "ogg", "vorbis", "wav", "flac", "pcm"] }
+lewton = "0.10"
 cpal = "0.17.1"
 base64 = "0.21"
 rand = "0.8"

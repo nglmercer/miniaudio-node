@@ -7,18 +7,58 @@ use std::io::{BufReader, Cursor, Read, Seek};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-// Helper function for robust decoding
+// Helper function for robust decoding of buffers
+pub fn create_decoder_from_buffer(data: Vec<u8>, extension: Option<&str>) -> Result<Decoder<Cursor<Vec<u8>>>> {
+    let cursor = Cursor::new(data);
+
+    // 1. Try with the provided hint if any
+    if let Some(ext) = extension {
+        let mut mut_cursor = cursor.clone();
+        mut_cursor.rewind().ok();
+        if let Ok(decoder) = Decoder::builder().with_data(mut_cursor).with_hint(ext).build() {
+            return Ok(decoder);
+        }
+    }
+
+    // 2. Try automatic detection
+    let mut mut_cursor = cursor.clone();
+    mut_cursor.rewind().ok();
+    if let Ok(decoder) = Decoder::builder().with_data(mut_cursor).build() {
+        return Ok(decoder);
+    }
+
+    // 3. Fallback hints for common TTS formats
+    // Symphonia and rodio recognize these hints
+    for hint in &["ogg", "aac", "mp3", "m4a", "wav", "flac"] {
+        let mut mut_cursor = cursor.clone();
+        mut_cursor.rewind().ok();
+        if let Ok(decoder) = Decoder::builder().with_data(mut_cursor).with_hint(*hint).build() {
+            debug_log!("Decoder created using fallback hint: {}", hint);
+            return Ok(decoder);
+        }
+    }
+
+    // Final attempt without hint to get the actual error message
+    let mut mut_cursor = cursor;
+    mut_cursor.rewind().ok();
+    Decoder::builder().with_data(mut_cursor).build().map_err(|e| {
+        Error::new(
+            Status::InvalidArg,
+            format!("Failed to recognize audio format: {}. Try providing a 'hint' parameter.", e),
+        )
+    })
+}
+
+// Helper function for files
 pub fn create_decoder<R>(mut data: R, extension: Option<&str>) -> Result<Decoder<R>>
 where
     R: Read + Seek + Send + Sync + 'static,
 {
     data.rewind().ok();
-    let builder = Decoder::builder().with_data(data);
-    let builder = if let Some(ext) = extension {
-        builder.with_hint(ext)
-    } else {
-        builder
-    };
+    let mut builder = Decoder::builder().with_data(data);
+    if let Some(ext) = extension {
+        builder = builder.with_hint(ext);
+    }
 
     builder.build().map_err(|e| {
         Error::new(
@@ -109,8 +149,8 @@ impl AudioPlayer {
     }
 
     #[napi]
-    pub fn load_file(&mut self, file_path: String) -> Result<()> {
-        debug_log!("Loading file: {}", file_path);
+    pub fn load_file(&mut self, file_path: String, hint: Option<String>) -> Result<()> {
+        debug_log!("Loading file: {} (hint: {:?})", file_path, hint);
         let path = Path::new(&file_path);
         if !path.exists() {
             debug_log!("File not found: {}", file_path);
@@ -129,8 +169,8 @@ impl AudioPlayer {
             .map_err(|e| Error::new(Status::InvalidArg, format!("Failed to open file: {}", e)))?;
         let reader = BufReader::new(file);
 
-        let ext = path.extension().and_then(|s| s.to_str());
-        let decoder = create_decoder(reader, ext)?;
+        let ext_hint = hint.as_deref().or_else(|| path.extension().and_then(|s| s.to_str()));
+        let decoder = create_decoder(reader, ext_hint)?;
 
         // Calculate duration from decoder
         let duration_seconds = decoder
@@ -149,8 +189,8 @@ impl AudioPlayer {
     }
 
     #[napi]
-    pub fn load_buffer(&mut self, audio_data: Vec<u8>) -> Result<()> {
-        debug_log!("Loading buffer ({} bytes)", audio_data.len());
+    pub fn load_buffer(&mut self, audio_data: Vec<u8>, hint: Option<String>) -> Result<()> {
+        debug_log!("Loading buffer ({} bytes, hint: {:?})", audio_data.len(), hint);
         if audio_data.is_empty() {
             debug_log!("Audio buffer is empty");
             return Err(Error::new(Status::InvalidArg, "Audio buffer is empty"));
@@ -159,16 +199,8 @@ impl AudioPlayer {
         self.initialized = true;
         self.stop().ok();
 
-        let cursor = Cursor::new(audio_data.clone());
-
-        // For buffers, we try with common hints if automatic detection fails
-        // Order: Sniff (None) -> OGG -> AAC -> MP3 -> WAV -> FLAC
-        let decoder = create_decoder(cursor.clone(), None)
-            .or_else(|_| create_decoder(cursor.clone(), Some("ogg")))
-            .or_else(|_| create_decoder(cursor.clone(), Some("aac")))
-            .or_else(|_| create_decoder(cursor.clone(), Some("mp3")))
-            .or_else(|_| create_decoder(cursor.clone(), Some("wav")))
-            .or_else(|_| create_decoder(cursor, Some("flac")))?;
+        // Use the robust buffer decoder
+        let decoder = create_decoder_from_buffer(audio_data.clone(), hint.as_deref())?;
 
         // Calculate duration from decoder
         let duration_seconds = decoder
@@ -188,8 +220,8 @@ impl AudioPlayer {
     }
 
     #[napi]
-    pub fn load_base64(&mut self, base64_data: String) -> Result<()> {
-        debug_log!("Loading base64 audio data");
+    pub fn load_base64(&mut self, base64_data: String, hint: Option<String>) -> Result<()> {
+        debug_log!("Loading base64 audio data (hint: {:?})", hint);
         if base64_data.is_empty() {
             debug_log!("Base64 data is empty");
             return Err(Error::new(Status::InvalidArg, "Base64 data is empty"));
@@ -202,7 +234,7 @@ impl AudioPlayer {
                     format!("Failed to decode base64: {}", e),
                 )
             })?;
-        self.load_buffer(audio_data)
+        self.load_buffer(audio_data, hint)
     }
 
     #[napi]
@@ -284,20 +316,17 @@ impl AudioPlayer {
                 debug_log!("Sink is empty, appending source...");
                 if let Some(buffer_data) = self.audio_buffer.lock().unwrap().clone() {
                     debug_log!("Playing from buffer ({} bytes)", buffer_data.len());
-                    let cursor = Cursor::new(buffer_data);
-                    let source = create_decoder(cursor.clone(), None)
-                        .or_else(|_| create_decoder(cursor.clone(), Some("ogg")))
-                        .or_else(|_| create_decoder(cursor.clone(), Some("aac")))
-                        .or_else(|_| create_decoder(cursor.clone(), Some("mp3")))
-                        .or_else(|_| create_decoder(cursor, Some("wav")))?;
+                    let source = create_decoder_from_buffer(buffer_data, None)?;
                     sink.append(source);
                 } else if let Some(file_path) = &self.current_file {
-                    debug_log!("Playing from file: {}", file_path);
-                    let file = File::open(file_path).map_err(|e| Error::new(Status::InvalidArg, e.to_string()))?;
-                    let reader = BufReader::new(file);
-                    let ext = Path::new(file_path).extension().and_then(|s| s.to_str());
-                    let source = create_decoder(reader, ext)?;
-                    sink.append(source);
+                    if !file_path.starts_with("__BUFFER__") {
+                        debug_log!("Playing from file: {}", file_path);
+                        let file = File::open(file_path).map_err(|e| Error::new(Status::InvalidArg, e.to_string()))?;
+                        let reader = BufReader::new(file);
+                        let ext = Path::new(file_path).extension().and_then(|s| s.to_str());
+                        let source = create_decoder(reader, ext)?;
+                        sink.append(source);
+                    }
                 }
             } else {
                 debug_log!("Resuming paused audio");
@@ -567,12 +596,7 @@ impl AudioPlayer {
                 let bytes_per_second = sample_rate * 4.0; // 16-bit stereo = 4 bytes per sample
                 let skip_bytes = ((position * bytes_per_second) as usize).min(buffer_data.len());
 
-                let cursor = Cursor::new(buffer_data[skip_bytes..].to_vec());
-                let decoder = create_decoder(cursor.clone(), None)
-                    .or_else(|_| create_decoder(cursor.clone(), Some("ogg")))
-                    .or_else(|_| create_decoder(cursor.clone(), Some("aac")))
-                    .or_else(|_| create_decoder(cursor.clone(), Some("mp3")))
-                    .or_else(|_| create_decoder(cursor, Some("wav")))?;
+                let decoder = create_decoder_from_buffer(buffer_data[skip_bytes..].to_vec(), None)?;
 
                 sink.append(decoder);
                 debug_log!(
@@ -611,7 +635,7 @@ pub fn quick_play(file_path: String, config: Option<AudioPlayerConfig>) -> Resul
             player.set_volume(vol)?;
         }
     }
-    player.load_file(file_path)?;
+    player.load_file(file_path, None)?;
 
     let auto_play = config.as_ref().and_then(|c| c.auto_play).unwrap_or(false);
     if auto_play {

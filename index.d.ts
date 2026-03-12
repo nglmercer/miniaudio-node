@@ -5,7 +5,7 @@ export declare class AudioDecoder {
   /** Create a decoder from a file path */
   constructor(filePath: string)
   /** Create a decoder from raw audio data */
-  static fromData(data: Array<number>): AudioDecoder
+  static fromData(data: Array<number>, hint?: string | undefined | null): AudioDecoder
   /** Get sample rate of decoded audio */
   getSampleRate(): number
   /** Get number of channels (1=mono, 2=stereo, etc.) */
@@ -62,9 +62,9 @@ export declare class AudioPassthrough {
 export declare class AudioPlayer {
   constructor()
   getDevices(): Array<AudioDeviceInfo>
-  loadFile(filePath: string): void
-  loadBuffer(audioData: Array<number>): void
-  loadBase64(base64Data: string): void
+  loadFile(filePath: string, hint?: string | undefined | null): void
+  loadBuffer(audioData: Array<number>, hint?: string | undefined | null): void
+  loadBase64(base64Data: string, hint?: string | undefined | null): void
   play(): void
   pause(): void
   stop(): void

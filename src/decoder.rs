@@ -2,11 +2,11 @@
 
 use napi::{Error, Result, Status};
 use napi_derive::napi;
-use rodio::{Decoder, Source};
+use rodio::Source;
 use std::fs::File;
-use std::io::{BufReader, Cursor};
+use std::io::BufReader;
 use std::sync::{Arc, Mutex};
-use crate::player::create_decoder;
+use crate::player::{create_decoder, create_decoder_from_buffer};
 
 /// Decoder for audio files in various formats (WAV, MP3, FLAC, OGG, etc.)
 #[napi]
@@ -35,9 +35,8 @@ impl AudioDecoder {
             .map_err(|e| Error::new(Status::InvalidArg, format!("Failed to open file: {}", e)))?;
 
         let reader = BufReader::new(file);
-        let source = Decoder::new(reader).map_err(|e| {
-            Error::new(Status::InvalidArg, format!("Failed to decode audio: {}", e))
-        })?;
+        let ext = std::path::Path::new(&file_path).extension().and_then(|s| s.to_str());
+        let source = create_decoder(reader, ext)?;
 
         let sample_rate = source.sample_rate().get();
         let channels = source.channels().get();
@@ -54,17 +53,8 @@ impl AudioDecoder {
 
     /// Create a decoder from raw audio data
     #[napi(factory)]
-    pub fn from_data(data: Vec<u8>) -> Result<Self> {
-        let cursor = Cursor::new(data.clone());
-        let source = Decoder::new(cursor).map_err(|e| {
-            Error::new(
-                Status::InvalidArg,
-                format!(
-                    "Failed to decode audio data. The format may be unsupported or the data may be corrupted. Error: {}",
-                    e
-                ),
-            )
-        })?;
+    pub fn from_data(data: Vec<u8>, hint: Option<String>) -> Result<Self> {
+        let source = create_decoder_from_buffer(data.clone(), hint.as_deref())?;
 
         let sample_rate = source.sample_rate().get();
         let channels = source.channels().get();
@@ -112,7 +102,7 @@ impl AudioDecoder {
                     data_guard.as_ref().cloned()
                 };
                 if let Some(data) = data {
-                    *self = AudioDecoder::from_data(data)?;
+                    *self = AudioDecoder::from_data(data, None)?;
                     Ok(())
                 } else {
                     Err(Error::new(Status::InvalidArg, "No audio data to reset"))
@@ -130,7 +120,8 @@ impl AudioDecoder {
             })?;
             let reader = BufReader::new(file);
 
-            let ext = std::path::Path::new(file_path).extension().and_then(|s| s.to_str());
+            let path = std::path::Path::new(file_path);
+            let ext = path.extension().and_then(|s| s.to_str());
             let source = create_decoder(reader, ext)?;
 
             let samples: Vec<f32> = source.collect();
@@ -139,13 +130,7 @@ impl AudioDecoder {
         } else {
             let data_guard = self.data.lock().unwrap();
             if let Some(data) = data_guard.as_ref() {
-                let cursor = Cursor::new(data.clone());
-
-                // For buffers, we try with common hints if automatic detection fails
-                let source = create_decoder(cursor.clone(), None)
-                    .or_else(|_| create_decoder(cursor.clone(), Some("ogg")))
-                    .or_else(|_| create_decoder(cursor.clone(), Some("aac")))
-                    .or_else(|_| create_decoder(cursor, Some("mp3")))?;
+                let source = create_decoder_from_buffer(data.clone(), None)?;
 
                 let samples: Vec<f32> = source.collect();
                 let samples_i16: Vec<i16> =
@@ -266,7 +251,7 @@ impl LoopedDecoder {
         } else {
             let data_guard = self.decoder.data.lock().unwrap();
             let data = data_guard.as_ref().cloned().unwrap_or_default();
-            AudioDecoder::from_data(data).unwrap_or_else(|_| AudioDecoder {
+            AudioDecoder::from_data(data, None).unwrap_or_else(|_| AudioDecoder {
                 data: Arc::new(Mutex::new(None)),
                 file_path: None,
                 sample_rate: 44100,
@@ -331,7 +316,7 @@ impl DecoderBuilder {
 
     #[napi]
     pub fn build_from_data(&self, data: Vec<u8>) -> Result<AudioDecoder> {
-        AudioDecoder::from_data(data)
+        AudioDecoder::from_data(data, None)
     }
 
     #[napi]
