@@ -25,6 +25,7 @@ targets = [
 napi = { version = "3.8.2", features = ["napi4", "serde-json", "async"] }
 napi-derive = "3.5.1"
 rodio = { version = "0.21.1", features = ["wav", "mp3", "flac", "vorbis", "symphonia-all"] }
+symphonia = { version = "0.5.5", features = ["all"] }
 cpal = "0.17.1"
 base64 = "0.21"
 rand = "0.8"

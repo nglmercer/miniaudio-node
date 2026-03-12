@@ -485,6 +485,7 @@ dependencies = [
  "rand",
  "ringbuf",
  "rodio",
+ "symphonia",
 ]
 
 [[package]]
