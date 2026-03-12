@@ -56,7 +56,13 @@ impl AudioDecoder {
     pub fn from_data(data: Vec<u8>) -> Result<Self> {
         let cursor = Cursor::new(data.clone());
         let source = Decoder::new(cursor).map_err(|e| {
-            Error::new(Status::InvalidArg, format!("Failed to decode audio: {}", e))
+            Error::new(
+                Status::InvalidArg,
+                format!(
+                    "Failed to decode audio data. The format may be unsupported or the data may be corrupted. Error: {}",
+                    e
+                ),
+            )
         })?;
 
         let sample_rate = source.sample_rate();

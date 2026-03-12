@@ -114,11 +114,9 @@ impl AudioPlayer {
         })?;
 
         // Calculate duration from decoder
-        let duration = decoder
+        let duration_seconds = decoder
             .total_duration()
-            .unwrap_or(std::time::Duration::ZERO);
-        let duration_seconds =
-            duration.as_secs() as f64 + duration.subsec_nanos() as f64 / 1_000_000_000.0;
+            .map_or(0.0, |d| d.as_secs_f64());
         *self.duration.lock().unwrap() = duration_seconds;
 
         debug_log!(
@@ -143,14 +141,23 @@ impl AudioPlayer {
         self.stop().ok();
 
         let cursor = Cursor::new(audio_data.clone());
-        let _decoder = Decoder::new(cursor).map_err(|e| {
+        let decoder = Decoder::new(cursor).map_err(|e| {
+            debug_log!("Failed to decode buffer: {}", e);
             Error::new(
                 Status::InvalidArg,
-                format!("Failed to decode buffer: {}", e),
+                format!(
+                    "Failed to decode audio buffer. The format may be unsupported or the data may be corrupted. Error: {}",
+                    e
+                ),
             )
         })?;
 
-        *self.duration.lock().unwrap() = 0.0;
+        // Calculate duration from decoder
+        let duration_seconds = decoder
+            .total_duration()
+            .map_or(0.0, |d| d.as_secs_f64());
+        *self.duration.lock().unwrap() = duration_seconds;
+
         *self.audio_buffer.lock().unwrap() = Some(audio_data);
         self.current_file = Some(format!(
             "__BUFFER__{}",
