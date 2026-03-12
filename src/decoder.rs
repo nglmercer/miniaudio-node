@@ -6,6 +6,7 @@ use rodio::{Decoder, Source};
 use std::fs::File;
 use std::io::{BufReader, Cursor};
 use std::sync::{Arc, Mutex};
+use crate::player::create_decoder;
 
 /// Decoder for audio files in various formats (WAV, MP3, FLAC, OGG, etc.)
 #[napi]
@@ -128,9 +129,9 @@ impl AudioDecoder {
                 Error::new(Status::InvalidArg, format!("Failed to open file: {}", e))
             })?;
             let reader = BufReader::new(file);
-            let source = Decoder::new(reader).map_err(|e| {
-                Error::new(Status::InvalidArg, format!("Failed to decode audio: {}", e))
-            })?;
+
+            let ext = std::path::Path::new(file_path).extension().and_then(|s| s.to_str());
+            let source = create_decoder(reader, ext)?;
 
             let samples: Vec<f32> = source.collect();
             let samples_i16: Vec<i16> = samples.into_iter().map(|s| (s * 32767.0) as i16).collect();
@@ -139,9 +140,12 @@ impl AudioDecoder {
             let data_guard = self.data.lock().unwrap();
             if let Some(data) = data_guard.as_ref() {
                 let cursor = Cursor::new(data.clone());
-                let source = Decoder::new(cursor).map_err(|e| {
-                    Error::new(Status::InvalidArg, format!("Failed to decode audio: {}", e))
-                })?;
+
+                // For buffers, we try with common hints if automatic detection fails
+                let source = create_decoder(cursor.clone(), None)
+                    .or_else(|_| create_decoder(cursor.clone(), Some("ogg")))
+                    .or_else(|_| create_decoder(cursor.clone(), Some("aac")))
+                    .or_else(|_| create_decoder(cursor, Some("mp3")))?;
 
                 let samples: Vec<f32> = source.collect();
                 let samples_i16: Vec<i16> =

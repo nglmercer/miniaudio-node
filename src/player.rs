@@ -8,14 +8,17 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 // Helper function for robust decoding
-fn create_decoder<R>(data: R, extension: Option<&str>) -> Result<Decoder<R>>
+pub fn create_decoder<R>(mut data: R, extension: Option<&str>) -> Result<Decoder<R>>
 where
     R: Read + Seek + Send + Sync + 'static,
 {
-    let mut builder = Decoder::builder().with_data(data);
-    if let Some(ext) = extension {
-        builder = builder.with_hint(ext);
-    }
+    data.rewind().ok();
+    let builder = Decoder::builder().with_data(data);
+    let builder = if let Some(ext) = extension {
+        builder.with_hint(ext)
+    } else {
+        builder
+    };
 
     builder.build().map_err(|e| {
         Error::new(
@@ -80,7 +83,8 @@ impl AudioPlayer {
         // Try to initialize the output stream and sink immediately
         // This prevents the first-play delay
         match DeviceSinkBuilder::open_default_sink() {
-            Ok(stream) => {
+            Ok(mut stream) => {
+                stream.log_on_drop(false);
                 let sink = Player::connect_new(stream.mixer());
                 *player.output_stream.lock().unwrap() = Some(stream);
                 *player.sink.lock().unwrap() = Some(sink);
@@ -158,11 +162,13 @@ impl AudioPlayer {
         let cursor = Cursor::new(audio_data.clone());
 
         // For buffers, we try with common hints if automatic detection fails
-        let decoder = create_decoder(cursor.clone(), None).or_else(|_| {
-            create_decoder(cursor.clone(), Some("ogg"))
-        }).or_else(|_| {
-            create_decoder(cursor, Some("aac"))
-        })?;
+        // Order: Sniff (None) -> OGG -> AAC -> MP3 -> WAV -> FLAC
+        let decoder = create_decoder(cursor.clone(), None)
+            .or_else(|_| create_decoder(cursor.clone(), Some("ogg")))
+            .or_else(|_| create_decoder(cursor.clone(), Some("aac")))
+            .or_else(|_| create_decoder(cursor.clone(), Some("mp3")))
+            .or_else(|_| create_decoder(cursor.clone(), Some("wav")))
+            .or_else(|_| create_decoder(cursor, Some("flac")))?;
 
         // Calculate duration from decoder
         let duration_seconds = decoder
@@ -246,13 +252,14 @@ impl AudioPlayer {
             if sink_guard.is_none() || output_stream_guard.is_none() {
                 debug_log!("Recreating output stream and sink...");
 
-                let stream = DeviceSinkBuilder::open_default_sink().map_err(|e| {
+                let mut stream = DeviceSinkBuilder::open_default_sink().map_err(|e| {
                     debug_log!("Failed to create output stream: {}", e);
                     Error::new(
                         Status::GenericFailure,
                         format!("Failed to create output stream: {}", e),
                     )
                 })?;
+                stream.log_on_drop(false);
 
                 let sink = Player::connect_new(stream.mixer());
 
@@ -278,11 +285,11 @@ impl AudioPlayer {
                 if let Some(buffer_data) = self.audio_buffer.lock().unwrap().clone() {
                     debug_log!("Playing from buffer ({} bytes)", buffer_data.len());
                     let cursor = Cursor::new(buffer_data);
-                    let source = create_decoder(cursor.clone(), None).or_else(|_| {
-                        create_decoder(cursor.clone(), Some("ogg"))
-                    }).or_else(|_| {
-                        create_decoder(cursor, Some("aac"))
-                    })?;
+                    let source = create_decoder(cursor.clone(), None)
+                        .or_else(|_| create_decoder(cursor.clone(), Some("ogg")))
+                        .or_else(|_| create_decoder(cursor.clone(), Some("aac")))
+                        .or_else(|_| create_decoder(cursor.clone(), Some("mp3")))
+                        .or_else(|_| create_decoder(cursor, Some("wav")))?;
                     sink.append(source);
                 } else if let Some(file_path) = &self.current_file {
                     debug_log!("Playing from file: {}", file_path);
@@ -514,13 +521,14 @@ impl AudioPlayer {
                 drop(sink_guard);
                 drop(output_stream_guard);
 
-                let stream = DeviceSinkBuilder::open_default_sink().map_err(|e| {
+                let mut stream = DeviceSinkBuilder::open_default_sink().map_err(|e| {
                     debug_log!("Failed to create output stream for seek: {}", e);
                     Error::new(
                         Status::GenericFailure,
                         format!("Failed to create output stream: {}", e),
                     )
                 })?;
+                stream.log_on_drop(false);
 
                 let sink_new = Player::connect_new(stream.mixer());
                 *self.output_stream.lock().unwrap() = Some(stream);
@@ -560,11 +568,11 @@ impl AudioPlayer {
                 let skip_bytes = ((position * bytes_per_second) as usize).min(buffer_data.len());
 
                 let cursor = Cursor::new(buffer_data[skip_bytes..].to_vec());
-                let decoder = create_decoder(cursor.clone(), None).or_else(|_| {
-                    create_decoder(cursor.clone(), Some("ogg"))
-                }).or_else(|_| {
-                    create_decoder(cursor, Some("aac"))
-                })?;
+                let decoder = create_decoder(cursor.clone(), None)
+                    .or_else(|_| create_decoder(cursor.clone(), Some("ogg")))
+                    .or_else(|_| create_decoder(cursor.clone(), Some("aac")))
+                    .or_else(|_| create_decoder(cursor.clone(), Some("mp3")))
+                    .or_else(|_| create_decoder(cursor, Some("wav")))?;
 
                 sink.append(decoder);
                 debug_log!(
