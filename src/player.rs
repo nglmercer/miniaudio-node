@@ -266,7 +266,12 @@ impl AudioPlayer {
                 if let Some(buffer_data) = self.audio_buffer.lock().unwrap().clone() {
                     debug_log!("Playing from buffer ({} bytes)", buffer_data.len());
                     let cursor = Cursor::new(buffer_data);
-                    let source = Decoder::new(cursor).unwrap();
+                    let source = Decoder::new(cursor).map_err(|e| {
+                        Error::new(
+                            Status::InvalidArg,
+                            format!("Failed to create decoder for buffer: {}", e),
+                        )
+                    })?;
                     sink.append(source);
                 } else if let Some(file_path) = &self.current_file {
                     debug_log!("Playing from file: {}", file_path);
