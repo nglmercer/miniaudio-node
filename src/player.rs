@@ -23,6 +23,11 @@ pub struct AudioPlayer {
     #[allow(dead_code)]
     output_stream: Arc<Mutex<Option<rodio::OutputStream>>>,
     audio_buffer: Arc<Mutex<Option<Vec<u8>>>>,
+    // Real sample rate / channel count of the loaded buffer/content.
+    // Required to correctly seek within buffer sources (TTS audio is often
+    // mono and not 44100 Hz, e.g. 22050 Hz pcm_s16le).
+    buffer_sample_rate: u32,
+    buffer_channels: u16,
     // Track if player was ever initialized
     initialized: bool,
     // Track current playback time (using Unix timestamp for napi compatibility)
@@ -40,6 +45,8 @@ impl Default for AudioPlayer {
             sink: Arc::new(Mutex::new(None)),
             output_stream: Arc::new(Mutex::new(None)),
             audio_buffer: Arc::new(Mutex::new(None)),
+            buffer_sample_rate: 0,
+            buffer_channels: 0,
             initialized: false,
             start_time: Arc::new(Mutex::new(None)),
             total_paused_ns: Arc::new(Mutex::new(0)),
@@ -143,15 +150,21 @@ impl AudioPlayer {
         self.stop().ok();
 
         let cursor = Cursor::new(audio_data.clone());
-        let _decoder = Decoder::new(cursor).map_err(|e| {
+        let decoder = Decoder::new(cursor).map_err(|e| {
             Error::new(
                 Status::InvalidArg,
                 format!("Failed to decode buffer: {}", e),
             )
         })?;
 
+        // Capture the real format so buffer seeks use correct byte offsets.
+        let buffer_sample_rate = decoder.sample_rate();
+        let buffer_channels = decoder.channels();
+
         *self.duration.lock().unwrap() = 0.0;
         *self.audio_buffer.lock().unwrap() = Some(audio_data);
+        self.buffer_sample_rate = buffer_sample_rate;
+        self.buffer_channels = buffer_channels;
         self.current_file = Some(format!(
             "__BUFFER__{}",
             std::time::SystemTime::now().elapsed().unwrap().as_millis()
@@ -346,6 +359,8 @@ impl AudioPlayer {
         }
         *self.sink.lock().unwrap() = None;
         *self.audio_buffer.lock().unwrap() = None;
+        self.buffer_sample_rate = 0;
+        self.buffer_channels = 0;
         *self.state.lock().unwrap() = PlaybackState::Stopped;
         self.current_file = None;
         debug_log!("State set to Stopped");
@@ -533,10 +548,21 @@ impl AudioPlayer {
                 sink.append(source);
                 debug_log!("File source appended with skip to position: {}s", position);
             } else if let Some(ref buffer_data) = *self.audio_buffer.lock().unwrap() {
-                // For buffer sources, we skip bytes based on approximate position
-                let sample_rate = 44100.0; // Assume common sample rate
-                let bytes_per_second = sample_rate * 4.0; // 16-bit stereo = 4 bytes per sample
-                let skip_bytes = ((position * bytes_per_second) as usize).min(buffer_data.len());
+                // For buffer sources, we skip bytes based on the actual format
+                // of the loaded content. TTS-generated audio is commonly mono
+                // and not 44100 Hz (e.g. 22050 Hz pcm_s16le), so we must use the
+                // real sample rate and channel count instead of hard-coded values.
+                let channels = if self.buffer_channels > 0 {
+                    self.buffer_channels
+                } else {
+                    2
+                };
+                let sample_rate = if self.buffer_sample_rate > 0 {
+                    self.buffer_sample_rate
+                } else {
+                    44100
+                };
+                let skip_bytes = buffer_skip_bytes(sample_rate, channels, position, buffer_data.len());
 
                 let cursor = Cursor::new(buffer_data[skip_bytes..].to_vec());
                 let decoder = Decoder::new(cursor).map_err(|e| {
@@ -590,4 +616,62 @@ pub fn quick_play(file_path: String, config: Option<AudioPlayerConfig>) -> Resul
         player.play()?;
     }
     Ok(player)
+}
+
+/// Compute the byte offset to skip when seeking within interleaved 16-bit PCM
+/// buffer data (e.g. a decoded WAV in memory).
+///
+/// `sample_rate` and `channels` are the *real* format of the loaded audio.
+/// Using incorrect values (the previous hard-coded `44100 Hz` / stereo) makes
+/// seeking TTS-generated audio (commonly mono, e.g. 22050 Hz) land at the
+/// wrong position or skip past the end of the data entirely.
+fn buffer_skip_bytes(sample_rate: u32, channels: u16, position: f64, data_len: usize) -> usize {
+    let channels = (channels as u64).max(1);
+    let bytes_per_sample = 2u64 * channels; // 16-bit samples
+    let bytes_per_second = bytes_per_sample * sample_rate as u64;
+    let skip = (position * bytes_per_second as f64) as usize;
+    skip.min(data_len)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_buffer_skip_bytes_mono_22050_tts() {
+        // TTS curl output: mono, 22050 Hz, pcm_s16le (2 bytes/sample).
+        let sample_rate = 22050u32;
+        let channels = 1u16;
+        let data_len = 22050 * 2 + 44; // ~1s plus WAV header
+
+        // 0.5s * 22050 * 2 = 22050 bytes
+        assert_eq!(buffer_skip_bytes(sample_rate, channels, 0.5, data_len), 22050);
+
+        // 1.0s * 22050 * 2 = 44100 bytes
+        assert_eq!(buffer_skip_bytes(sample_rate, channels, 1.0, data_len), 44100);
+
+        // Seeking past the end is clamped to data length.
+        assert_eq!(
+            buffer_skip_bytes(sample_rate, channels, 100.0, data_len),
+            data_len
+        );
+    }
+
+    #[test]
+    fn test_buffer_skip_bytes_stereo_44100() {
+        let sample_rate = 44100u32;
+        let channels = 2u16;
+
+        // 1.0s * 44100 * 4 = 176400 bytes
+        assert_eq!(
+            buffer_skip_bytes(sample_rate, channels, 1.0, usize::MAX),
+            176400
+        );
+    }
+
+    #[test]
+    fn test_buffer_skip_bytes_zero_channels_falls_back_to_one() {
+        // Guard against a buffer with 0 channels (should never happen).
+        assert_eq!(buffer_skip_bytes(22050, 0, 0.5, usize::MAX), 22050);
+    }
 }
