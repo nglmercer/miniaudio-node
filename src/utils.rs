@@ -1,7 +1,9 @@
 use crate::types::{AudioMetadata, DEBUG_ENABLED};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
-use rodio::{OutputStreamBuilder, Sink, Source};
+use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
+use std::fs::File;
+use std::io::BufReader;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::thread;
@@ -86,9 +88,31 @@ pub fn get_audio_metadata(file_path: String) -> Result<AudioMetadata> {
             format!("File not found: {}", file_path),
         ));
     }
-    // Rodio basic placeholder
+
+    // Decode the file to obtain the real duration.
+    let file = File::open(path).map_err(|e| {
+        Error::new(
+            Status::InvalidArg,
+            format!("Failed to open file '{}': {}", file_path, e),
+        )
+    })?;
+    let decoder = Decoder::new(BufReader::new(file)).map_err(|e| {
+        Error::new(
+            Status::InvalidArg,
+            format!("Failed to decode file '{}': {}", file_path, e),
+        )
+    })?;
+
+    // Some formats (e.g. OGG Vorbis) may not report a total duration
+    // without a full decode; fall back to 0.0 in that case.
+    let duration = decoder.total_duration().unwrap_or(Duration::ZERO);
+    let duration_seconds =
+        duration.as_secs() as f64 + duration.subsec_nanos() as f64 / 1_000_000_000.0;
+
+    // Note: tag extraction (title/artist/album) is not yet supported by the
+    // underlying rodio decoder and is returned as None.
     Ok(AudioMetadata {
-        duration: 0.0,
+        duration: duration_seconds,
         title: None,
         artist: None,
         album: None,

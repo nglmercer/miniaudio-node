@@ -69,7 +69,10 @@ impl Mixer {
     /// Get all current sources
     #[napi]
     pub fn get_sources(&self) -> Vec<MixerSource> {
-        self.sources.lock().unwrap_or_else(|e| e.into_inner()).to_vec()
+        self.sources
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .to_vec()
     }
 
     /// Get the number of sources
@@ -81,7 +84,10 @@ impl Mixer {
     /// Clear all sources
     #[napi]
     pub fn clear(&self) {
-        self.sources.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.sources
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 
     /// Mix all sources at a specific time point (synchronous operation)

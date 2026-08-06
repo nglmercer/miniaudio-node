@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.6.0] - 2026-08-06 🛠️ Audit Fixes & Stability
+## [1.6.1] - 2026-08-06 🛠️ Audit Fixes & Stability
 
 ### 🐛 Bug Fixes
 
@@ -14,17 +14,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fixed buffer duration**: `getDuration()` now returns the real duration for buffer-loaded audio (previously always `0`)
 - **Fixed `getDevices()`**: returns the real output devices from the system instead of a hard-coded placeholder
 - **Fixed `getCurrentTime()`**: playback clock is now clamped to the track duration after playback ends
+- **Fixed `getAudioMetadata()`**: now returns the real audio duration by decoding the file (previously always returned `0`). Tag fields (`title`/`artist`/`album`) are not yet extracted and remain `undefined`
+- **Fixed non-unique buffer IDs**: buffer-loaded players used `SystemTime::now().elapsed()` (always ≈0) to build their synthetic ID, so every buffer got `__BUFFER__0`; now uses the real Unix timestamp
+
+### 🔒 Safety & Build
+
+- **Removed `panic = "abort"` from the release profile**: with abort semantics, napi-rs cannot convert unexpected Rust panics into JavaScript errors — any panic would kill the whole Node/Bun process. The default unwind strategy restores that safety net
+- **Release profile now optimizes for speed** (`opt-level = 3` instead of `"z"`), matching the library's performance positioning
+- Removed unused napi features (`serde-json`, `async`)
+- Added `lint` and `format` npm scripts (`cargo fmt` + `cargo clippy -- -D warnings`)
+- Release workflow now publishes to NPM on tag push (requires the `NPM_TOKEN` repository secret; skips with a warning when absent)
 
 ### 🔧 Maintenance
 
 - Removed dead, never-compiled `src/source.rs` module (737 lines of unreferenced code)
 - Mutex locks recover from poisoning instead of panicking
-- Synced crate version with npm package (`1.6.0`)
+- Synced crate version with npm package
 - Updated dependencies: `base64 0.22`, `rand 0.9`
 - Added root `LICENSE` file (was only in `docs/`, breaking the README link and npm publishing)
-- Fixed README inaccuracies: supported formats (no M4A/AAC), `PlaybackState` string enum, test count, API tables, npm scripts
+- Fixed README inaccuracies: supported formats (no M4A/AAC), `PlaybackState` string enum, test count (53), API tables, npm scripts, `AudioMetadata` types, and clarified that Rust is only needed when building from source (pre-built binaries ship with the package)
 
-## [1.0.2] - 2025-01-08 🐛 Critical Bug Fixes & API Enhancements
+### 📚 Documentation
+
+- Backfilled missing changelog entries for releases v1.0.4 – v1.6.0
+- Corrected impossible/placeholder release dates (repo was created 2025-11-09)
+
+## [1.6.0] - 2026-02-06 🎤 Audio Recording
+
+### ✨ Features Added
+
+- **Audio recording**: new `AudioRecorder` class captures audio from input devices with ring-buffer access and level monitoring (peak/RMS via `getLevels()`)
+- **Device and host enumeration**: `getAvailableHosts()`, `getInputDevices()`, and `getInputDevicesByHost()` expose the full CPAL host/device landscape
+- New `RecorderConfig` and `AudioLevels` types in the public API
+
+### ⚡ Performance
+
+- Optimized the recording path with atomic flags (`AtomicBool`) and Linux-specific improvements
+
+## [1.5.1] - 2026-01-27 🐛 Seek Robustness
+
+### 🐛 Bug Fixes
+
+- **Improved `seekTo()` robustness**: added position validation (rejects NaN/Infinity), clamping, and clearer error handling
+- Fixed related tests
+
+## [1.5.0] - 2026-01-27 ⏱️ Seeking & Time Tracking
+
+### ✨ Features Added
+
+- **`seekTo(position)`**: seek to any position (in seconds) during playback
+- **Playback time tracking**: `getCurrentTime()` accounts for paused time
+- Output stream is pre-initialized in the player constructor to reduce first-play latency
+
+### 🐛 Bug Fixes
+
+- Fixed player timer accounting
+
+## [1.4.5] - 2026-01-17 🔧 ARM Linux Builds
+
+### 🔧 Maintenance
+
+- Added Linux ARM64 (`aarch64-unknown-linux-gnu`) build support in CI and the release workflow
+- CI dependency and workflow updates
+
+## [1.4.0] - 2026-01-17 🎛️ Full Audio Toolkit
+
+### ✨ Features Added
+
+- **Exposed the full rodio-based API surface** beyond `AudioPlayer`: `Mixer`, `AudioStream`/`AudioStreamBuilder`, `AudioDecoder`/`DecoderBuilder`/`LoopedDecoder`, `AudioSourceQueue`, `SamplesBuffer`/`StaticSamplesBuffer`, noise generators (white/pink/blue/violet/brownian/velvet), sample-rate/channel-count/sample-type converters, `dbToLinear`/`linearToDb`, and `testTone`
+- Updated and expanded examples
+
+### 🐛 Bug Fixes
+
+- Volume is now applied before appending a source to the sink, preventing audio cut-off at the start of playback
+
+## [1.0.5] – [1.2.1] - 2025-12-23 📦 Release Infrastructure
+
+These versions were never published to npm (npm went from 1.0.4 directly to 1.5.0). They consist entirely of iterations on the GitHub Actions release pipeline:
+
+- Multi-platform native builds (Windows x64/ia32, macOS x64/arm64, Linux x64)
+- npm publishing experiments: tokens, trusted publishing, registry configuration
+- Artifact handling and workflow caching fixes
+
+## [1.0.4] - 2025-12-23 📦 Buffer & Base64 Loading
+
+### ✨ Features Added
+
+- **`loadBuffer(audioData)`**: load audio from raw byte buffers (e.g. from `fetch` or `FileReader`)
+- **`loadBase64(base64Data)`**: load audio from base64-encoded data
+
+### 🔧 Maintenance
+
+- Added `.npmignore` for cleaner package publishing
+- Code formatting and error-handling improvements
+
+## [1.0.2] - 2025-11-09 🐛 Critical Bug Fixes & API Enhancements
 
 ### 🐛 Bug Fixes
 
@@ -79,7 +163,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - ✅ All unit tests working
   - ✅ Error handling tests passing
 
-## [1.0.1] - 2024-12-07 🐛 Bug Fixes & Documentation Updates
+## [1.0.1] - 2025-12-20 🐛 Bug Fixes & Documentation Updates
 
 ### 🐛 Bug Fixes
 
@@ -137,7 +221,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - ✅ Corrected API method calls
   - ✅ Improved error handling examples
 
-## [1.0.0] - 2024-11-XX 🎉 Initial Release
+## [1.0.0] - 2025-11-09 🎉 Initial Release
+
+> Never published to npm under this version — the first published 1.x release was 1.0.1.
 
 ### ✨ Features Added
 
@@ -154,16 +240,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🏗️ Technical Implementation
 
-- **Audio Engine**: `rodio` v0.17 for reliable cross-platform audio
-- **FFI Framework**: `napi-rs` v2.16 for stable Node.js integration
+- **Audio Engine**: `rodio` for reliable cross-platform audio
+- **FFI Framework**: `napi-rs` for stable Node.js integration
 - **Memory Safety**: Rust ownership system prevents memory leaks and crashes
 - **Build System**: Automated cross-platform compilation and packaging
 - **API Design**: Clean, intuitive JavaScript/TypeScript interface
 
 ### 🛠️ Technical Stack
 
-- **Audio Engine**: `rodio` v0.17 - Proven Rust audio library
-- **FFI Framework**: `napi-rs` v2.16 - Stable Node.js N-API bindings
+- **Audio Engine**: `rodio` - Proven Rust audio library
+- **FFI Framework**: `napi-rs` - Stable Node.js N-API bindings
 - **Build System**: Automated cross-platform native module compilation
 - **Memory Safety**: Rust's ownership system prevents memory leaks
 - **Performance**: Native performance with minimal JavaScript overhead
@@ -204,30 +290,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ✅ Better error reporting during compilation
 - ✅ Cross-platform compatibility verification
 
-### Project Structure
-
-```
-miniaudio_node/
-├── src/lib.rs              # Clean, optimized Rust source
-├── examples/
-│   ├── usage.js           # Basic usage example
-│   └── test_playback.js   # Functional audio test
-├── Cargo.toml             # Minimal, optimized dependencies
-├── package.json           # Complete Node.js configuration
-├── index.js              # Robust entry point with error handling
-├── index.d.ts            # Auto-generated TypeScript definitions
-├── README.md             # Comprehensive documentation
-└── CHANGELOG.md          # This file
-```
-
 ### Known Limitations
 
-- **Duration Tracking**: Currently returns 0.0 (placeholder)
-  - TODO: Implement with metadata library (e.g., `audiotags`)
-- **Position Tracking**: Currently returns 0.0 (placeholder)
-  - TODO: Implement custom position tracking
-- **Device Enumeration**: Simplified to default device only
-  - TODO: Full device enumeration with selection
+- **Metadata Tags**: `getAudioMetadata()` reports duration but does not extract ID3/Vorbis tags (title/artist/album)
+  - TODO: Integrate a tag-reading library (e.g., `lofty`)
+- **Streaming**: No network audio streaming support yet
 
 ### Performance Characteristics
 
@@ -265,43 +332,37 @@ The API remains exactly the same - only the package name has changed for better 
 
 ## 🚀 Roadmap & Future Enhancements
 
-### Planned Features (v0.2.0)
-- 🎯 **Position Tracking**: Real-time playback position
-- 📊 **Duration Metadata**: Audio file duration extraction
+### Shipped since the original roadmap
+
+- ✅ **Position Tracking**: `getCurrentTime()` with pause accounting (v1.5.0)
+- ✅ **Duration Metadata**: real duration for files and buffers (v1.6.0/v1.6.1)
+- ✅ **Recording Support**: `AudioRecorder` with levels and ring buffer (v1.6.0)
+- ✅ **Multi-device**: device/host enumeration for input and output (v1.6.0)
+- ✅ **Seeking**: `seekTo()` for files and buffers (v1.5.0, fixed for buffers in v1.6.1)
+
+### Still Planned
+
 - 🎚️ **Cross-fade**: Smooth transitions between tracks
 - 🎛️ **Equalizer**: Basic frequency controls
-- 🎤 **Recording Support**: Audio capture capabilities
 - 📋 **Playlist Management**: Built-in playlist functionality
 - 🔀 **Gapless Playback**: Seamless track transitions
 - 🌐 **Streaming Support**: Network audio streaming
 - 🎨 **Visualizations**: Audio waveform/FFT output
+- 🏷️ **Metadata Tags**: title/artist/album extraction via a tag library (e.g., `lofty`)
 
 ### Platform Enhancements
+
 - 📱 **Mobile Support**: iOS and Android bindings
 - 🌐 **WebAssembly**: Browser compatibility via WASM
-- 🔊 **Multi-device**: Multiple simultaneous audio outputs
-- 🎛️ **Advanced Device Selection**: Full device enumeration and control
+- 🎛️ **Advanced Device Selection**: output device selection per player
 
 ### Performance Optimizations
+
 - ⚡ **Buffer Management**: Optimized audio buffer sizes
 - 🔧 **Thread Pool**: Improved concurrent processing
 - 🧠 **Memory Pool**: Reduced allocation overhead
 - 📈 **SIMD Operations**: Vectorized audio processing
 - 🚀 **Lazy Loading**: On-demand feature loading
-
-1. **Metadata Extraction**: Duration, bitrate, and format information
-2. **Position Tracking**: Real-time playback position
-3. **Recording Support**: Audio capture functionality
-4. **Advanced Effects**: Reverb, EQ, and audio processing
-5. **Streaming Support**: Network audio streaming
-6. **Device Selection**: Multiple output device support
-
-### Performance Optimizations
-
-1. **Buffer Management**: Optimize audio buffer sizes
-2. **Thread Pool**: Improve concurrent processing
-3. **Memory Pool**: Reduce allocation overhead
-4. **SIMD**: Vector operations for audio processing
 
 ### Platform-specific Considerations
 
@@ -311,4 +372,4 @@ The API remains exactly the same - only the package name has changed for better 
 
 ---
 
-This changelog follows best practices for open-source projects and provides a comprehensive overview of the current state and future plans for the miniaudio-ffi library.
+This changelog follows best practices for open-source projects and provides a comprehensive overview of the current state and future plans for the miniaudio_node library.

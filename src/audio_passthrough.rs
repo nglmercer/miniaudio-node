@@ -84,7 +84,10 @@ impl AudioPassthrough {
             );
         });
 
-        *self.on_levels_callback.lock().unwrap_or_else(|e| e.into_inner()) = Some(cb);
+        *self
+            .on_levels_callback
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(cb);
         Ok(())
     }
 
@@ -272,7 +275,8 @@ impl AudioPassthrough {
                 &stream_config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                     if is_running_out.load(Ordering::SeqCst) {
-                        let mut rb_guard = ring_buffer_out.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut rb_guard =
+                            ring_buffer_out.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(rb) = rb_guard.as_mut() {
                             // Use pop_iter to get samples - it handles available samples internally
                             use ringbuf::traits::Consumer;

@@ -202,7 +202,10 @@ impl AudioRecorder {
             );
         });
 
-        *self.on_data_callback.lock().unwrap_or_else(|e| e.into_inner()) = Some(cb);
+        *self
+            .on_data_callback
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(cb);
         Ok(())
     }
 
@@ -333,7 +336,8 @@ impl AudioRecorder {
                 {
                     *last_peak.lock().unwrap_or_else(|e| e.into_inner()) = peak as f64;
                     if !data.is_empty() {
-                        *last_rms.lock().unwrap_or_else(|e| e.into_inner()) = (sum_sq / data.len() as f64).sqrt();
+                        *last_rms.lock().unwrap_or_else(|e| e.into_inner()) =
+                            (sum_sq / data.len() as f64).sqrt();
                     }
                 }
 
@@ -453,7 +457,11 @@ impl AudioRecorder {
 
     #[napi]
     pub fn get_buffer(&self) -> Result<SamplesBuffer> {
-        let samples = self.recorded_samples.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let samples = self
+            .recorded_samples
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         Ok(SamplesBuffer::create(
             self.channels as u32,
             self.sample_rate,
@@ -475,7 +483,10 @@ impl AudioRecorder {
 
     #[napi]
     pub fn clear(&mut self) {
-        self.recorded_samples.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.recorded_samples
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 
     #[napi]

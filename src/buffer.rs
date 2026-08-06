@@ -81,7 +81,11 @@ impl SamplesBuffer {
             .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;
 
         let sink = Sink::connect_new(stream.mixer());
-        let samples_i16 = self.samples.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let samples_i16 = self
+            .samples
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
 
         // Convert i16 samples to f32 for rodio
         let samples_f32: Vec<f32> = samples_i16

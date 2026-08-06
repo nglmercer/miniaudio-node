@@ -164,7 +164,7 @@ const player2 = quickPlay('path/to/audio.mp3', {
 // Get audio metadata
 const metadata = getAudioMetadata('music.mp3')
 console.log('Duration:', metadata.duration)
-console.log('Title:', metadata.title)
+console.log('Title:', metadata.title) // Note: tag extraction (title/artist/album) is not yet supported and returns undefined
 ```
 
 ### TypeScript with Full Types
@@ -249,7 +249,7 @@ quickPlay(filePath: string, config?: AudioPlayerConfig): AudioPlayer
 // Check format support
 isFormatSupported(format: string): boolean
 
-// Get audio metadata
+// Get audio metadata (duration is real; title/artist/album tags are not yet extracted)
 getAudioMetadata(filePath: string): AudioMetadata
 
 // Get audio system info
@@ -274,9 +274,9 @@ interface AudioDeviceInfo {
 
 interface AudioMetadata {
   duration: number
-  title?: string | null
-  artist?: string | null
-  album?: string | null
+  title?: string
+  artist?: string
+  album?: string
 }
 
 // String enum — values are the member names themselves
@@ -318,8 +318,12 @@ The package also exposes lower-level building blocks (all fully typed in `index.
 
 ### Required
 - **Bun** >= 1.0.0 (recommended)
-- **Rust** (latest stable) - [Install Rust](https://rustup.rs/)
 - **Node.js** >= 18.0.0 (optional)
+
+> Pre-built native binaries are included, so **Rust is not needed** to use the package.
+
+### Building from Source
+- **Rust** (latest stable) - [Install Rust](https://rustup.rs/) — only required for development or building the native module yourself
 
 ### Platform-Specific
 
@@ -515,8 +519,8 @@ We welcome contributions! Please follow our guidelines:
 
 ### Code Style
 
-- Use TypeScript for all new code
-- Follow ESLint and Prettier configurations
+- Use TypeScript for all new JavaScript/TypeScript code
+- Rust code must pass `cargo fmt --check` and `cargo clippy -- -D warnings` (run `bun run lint`)
 - Write tests for new functionality
 - Update documentation as needed
 

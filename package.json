@@ -1,6 +1,6 @@
 {
   "name": "miniaudio_node",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "High-performance native audio playback for Node.js and Bun. Built with Rust and the powerful rodio audio engine.",
   "keywords": [
     "audio",
@@ -31,6 +31,8 @@
     "build:debug": "napi build --platform",
     "build:watch": "napi build --watch",
     "test": "bun test",
+    "lint": "cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings",
+    "format": "cargo fmt --all",
     "clean": "napi clean && cargo clean",
     "copy:artifacts": "bun ./scripts/copy-artifacts.js",
     "examples:simple": "bun ./examples/simple-playback.ts",
