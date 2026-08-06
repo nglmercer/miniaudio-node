@@ -41,8 +41,8 @@ impl AudioSourceQueue {
     /// Add an audio source from a file
     #[napi]
     pub fn add_source(&mut self, file_path: String, title: Option<String>) -> Result<String> {
-        let id = format!("source_{}", self.sources.lock().unwrap().len());
-        let mut sources = self.sources.lock().unwrap();
+        let id = format!("source_{}", self.sources.lock().unwrap_or_else(|e| e.into_inner()).len());
+        let mut sources = self.sources.lock().unwrap_or_else(|e| e.into_inner());
         sources.push(AudioQueueItem {
             source_id: id.clone(),
             file_path: Some(file_path),
@@ -55,8 +55,8 @@ impl AudioSourceQueue {
     /// Add an audio source from a buffer
     #[napi]
     pub fn add_buffer(&mut self, buffer: Vec<i16>, title: Option<String>) -> Result<String> {
-        let id = format!("source_{}", self.sources.lock().unwrap().len());
-        let mut sources = self.sources.lock().unwrap();
+        let id = format!("source_{}", self.sources.lock().unwrap_or_else(|e| e.into_inner()).len());
+        let mut sources = self.sources.lock().unwrap_or_else(|e| e.into_inner());
         sources.push(AudioQueueItem {
             source_id: id.clone(),
             file_path: None,
@@ -69,7 +69,7 @@ impl AudioSourceQueue {
     /// Remove a source by its ID
     #[napi]
     pub fn remove_source(&mut self, source_id: String) -> Result<()> {
-        let mut sources = self.sources.lock().unwrap();
+        let mut sources = self.sources.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(pos) = sources.iter().position(|s| s.source_id == source_id) {
             sources.remove(pos);
             Ok(())
@@ -81,7 +81,7 @@ impl AudioSourceQueue {
     /// Get a specific source by its ID
     #[napi]
     pub fn get_source(&self, source_id: String) -> Result<AudioQueueItem> {
-        let sources = self.sources.lock().unwrap();
+        let sources = self.sources.lock().unwrap_or_else(|e| e.into_inner());
         sources
             .iter()
             .find(|s| s.source_id == source_id)
@@ -91,47 +91,47 @@ impl AudioSourceQueue {
 
     #[napi]
     pub fn get_sources(&self) -> Vec<AudioQueueItem> {
-        self.sources.lock().unwrap().clone()
+        self.sources.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     #[napi]
     pub fn get_length(&self) -> u32 {
-        self.sources.lock().unwrap().len() as u32
+        self.sources.lock().unwrap_or_else(|e| e.into_inner()).len() as u32
     }
 
     #[napi]
     pub fn get_current_index(&self) -> u32 {
-        *self.current_index.lock().unwrap() as u32
+        *self.current_index.lock().unwrap_or_else(|e| e.into_inner()) as u32
     }
 
     #[napi]
     pub fn set_current_index(&self, index: u32) -> Result<()> {
-        let len = self.sources.lock().unwrap().len() as u32;
+        let len = self.sources.lock().unwrap_or_else(|e| e.into_inner()).len() as u32;
         if index >= len {
             return Err(Error::new(
                 Status::InvalidArg,
                 format!("Index out of bounds: {} >= {}", index, len),
             ));
         }
-        *self.current_index.lock().unwrap() = index as usize;
+        *self.current_index.lock().unwrap_or_else(|e| e.into_inner()) = index as usize;
         Ok(())
     }
 
     #[napi]
     pub fn clear(&self) {
-        *self.sources.lock().unwrap() = Vec::new();
-        *self.current_index.lock().unwrap() = 0;
-        *self.is_playing.lock().unwrap() = false;
+        *self.sources.lock().unwrap_or_else(|e| e.into_inner()) = Vec::new();
+        *self.current_index.lock().unwrap_or_else(|e| e.into_inner()) = 0;
+        *self.is_playing.lock().unwrap_or_else(|e| e.into_inner()) = false;
     }
 
     #[napi]
     pub fn is_playing(&self) -> bool {
-        *self.is_playing.lock().unwrap()
+        *self.is_playing.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     #[napi]
     pub fn set_playing(&self, playing: bool) {
-        *self.is_playing.lock().unwrap() = playing;
+        *self.is_playing.lock().unwrap_or_else(|e| e.into_inner()) = playing;
     }
 }
 
@@ -157,20 +157,20 @@ impl SourcesQueueInput {
 
     #[napi]
     pub fn push_file(&self, file_path: String) -> Result<String> {
-        let mut queue = self.queue.lock().unwrap();
+        let mut queue = self.queue.lock().unwrap_or_else(|e| e.into_inner());
         queue.add_source(file_path, None)
     }
 
     #[napi]
     pub fn push_buffer(&self, buffer: Vec<i16>) -> Result<String> {
-        let mut queue = self.queue.lock().unwrap();
+        let mut queue = self.queue.lock().unwrap_or_else(|e| e.into_inner());
         queue.add_buffer(buffer, None)
     }
 
     #[napi]
     pub fn set_title(&self, source_id: String, title: String) -> Result<()> {
-        let queue = self.queue.lock().unwrap();
-        let mut sources = queue.sources.lock().unwrap();
+        let queue = self.queue.lock().unwrap_or_else(|e| e.into_inner());
+        let mut sources = queue.sources.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(source) = sources.iter_mut().find(|s| s.source_id == source_id) {
             source.title = Some(title);
             Ok(())
@@ -203,9 +203,9 @@ impl SourcesQueueOutput {
 
     #[napi]
     pub fn peek(&self) -> Result<AudioQueueItem> {
-        let queue = self.queue.lock().unwrap();
-        let sources = queue.sources.lock().unwrap();
-        let idx = *queue.current_index.lock().unwrap();
+        let queue = self.queue.lock().unwrap_or_else(|e| e.into_inner());
+        let sources = queue.sources.lock().unwrap_or_else(|e| e.into_inner());
+        let idx = *queue.current_index.lock().unwrap_or_else(|e| e.into_inner());
 
         if idx >= sources.len() {
             return Err(Error::new(Status::InvalidArg, "Queue is empty"));
@@ -216,9 +216,9 @@ impl SourcesQueueOutput {
 
     #[napi]
     pub fn pop(&self) -> Result<AudioQueueItem> {
-        let queue = self.queue.lock().unwrap();
-        let sources = queue.sources.lock().unwrap();
-        let mut idx = *queue.current_index.lock().unwrap();
+        let queue = self.queue.lock().unwrap_or_else(|e| e.into_inner());
+        let sources = queue.sources.lock().unwrap_or_else(|e| e.into_inner());
+        let mut idx = *queue.current_index.lock().unwrap_or_else(|e| e.into_inner());
 
         if idx >= sources.len() {
             return Err(Error::new(Status::InvalidArg, "Queue is empty"));
@@ -226,23 +226,23 @@ impl SourcesQueueOutput {
 
         let item = sources[idx].clone();
         idx += 1;
-        *queue.current_index.lock().unwrap() = idx;
+        *queue.current_index.lock().unwrap_or_else(|e| e.into_inner()) = idx;
         Ok(item)
     }
 
     #[napi]
     pub fn has_next(&self) -> bool {
-        let queue = self.queue.lock().unwrap();
-        let sources = queue.sources.lock().unwrap();
-        let idx = *queue.current_index.lock().unwrap();
+        let queue = self.queue.lock().unwrap_or_else(|e| e.into_inner());
+        let sources = queue.sources.lock().unwrap_or_else(|e| e.into_inner());
+        let idx = *queue.current_index.lock().unwrap_or_else(|e| e.into_inner());
         idx < sources.len()
     }
 
     #[napi]
     pub fn get_remaining(&self) -> u32 {
-        let queue = self.queue.lock().unwrap();
-        let sources = queue.sources.lock().unwrap();
-        let idx = *queue.current_index.lock().unwrap();
+        let queue = self.queue.lock().unwrap_or_else(|e| e.into_inner());
+        let sources = queue.sources.lock().unwrap_or_else(|e| e.into_inner());
+        let idx = *queue.current_index.lock().unwrap_or_else(|e| e.into_inner());
         (sources.len() - idx) as u32
     }
 }

@@ -53,8 +53,8 @@ impl AudioStream {
         let mixer = stream.mixer();
         let sink = Sink::connect_new(mixer);
 
-        *self.output_stream.lock().unwrap() = Some(stream);
-        *self.sink.lock().unwrap() = Some(sink);
+        *self.output_stream.lock().unwrap_or_else(|e| e.into_inner()) = Some(stream);
+        *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(sink);
 
         Ok(())
     }
@@ -118,8 +118,8 @@ impl AudioStream {
     /// Get the current playback state
     #[napi]
     pub fn get_state(&self) -> PlayError {
-        let is_playing = *self.is_playing.lock().unwrap();
-        let is_paused = *self.is_paused.lock().unwrap();
+        let is_playing = *self.is_playing.lock().unwrap_or_else(|e| e.into_inner());
+        let is_paused = *self.is_paused.lock().unwrap_or_else(|e| e.into_inner());
 
         if is_paused {
             PlayError::AlreadyPlaying
@@ -133,17 +133,17 @@ impl AudioStream {
     /// Check if audio is currently playing
     #[napi]
     pub fn is_playing(&self) -> bool {
-        *self.is_playing.lock().unwrap()
+        *self.is_playing.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Pause the stream
     #[napi]
     pub fn pause(&mut self) -> Result<()> {
-        let sink_guard = self.sink.lock().unwrap();
+        let sink_guard = self.sink.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(sink) = sink_guard.as_ref() {
             sink.pause();
-            *self.is_playing.lock().unwrap() = true;
-            *self.is_paused.lock().unwrap() = true;
+            *self.is_playing.lock().unwrap_or_else(|e| e.into_inner()) = true;
+            *self.is_paused.lock().unwrap_or_else(|e| e.into_inner()) = true;
             Ok(())
         } else {
             Err(Error::new(Status::InvalidArg, "Stream not initialized"))
@@ -153,11 +153,11 @@ impl AudioStream {
     /// Resume the stream
     #[napi]
     pub fn resume(&mut self) -> Result<()> {
-        let sink_guard = self.sink.lock().unwrap();
+        let sink_guard = self.sink.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(sink) = sink_guard.as_ref() {
             sink.play();
-            *self.is_playing.lock().unwrap() = true;
-            *self.is_paused.lock().unwrap() = false;
+            *self.is_playing.lock().unwrap_or_else(|e| e.into_inner()) = true;
+            *self.is_paused.lock().unwrap_or_else(|e| e.into_inner()) = false;
             Ok(())
         } else {
             Err(Error::new(Status::InvalidArg, "Stream not initialized"))
@@ -167,13 +167,13 @@ impl AudioStream {
     /// Stop the stream
     #[napi]
     pub fn stop(&mut self) -> Result<()> {
-        let sink_guard = self.sink.lock().unwrap();
+        let sink_guard = self.sink.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(sink) = sink_guard.as_ref() {
             sink.stop();
         }
-        *self.sink.lock().unwrap() = None;
-        *self.is_playing.lock().unwrap() = false;
-        *self.is_paused.lock().unwrap() = false;
+        *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.is_playing.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        *self.is_paused.lock().unwrap_or_else(|e| e.into_inner()) = false;
         Ok(())
     }
 
@@ -187,8 +187,8 @@ impl AudioStream {
             ));
         }
 
-        *self.volume.lock().unwrap() = volume as f32;
-        let sink_guard = self.sink.lock().unwrap();
+        *self.volume.lock().unwrap_or_else(|e| e.into_inner()) = volume as f32;
+        let sink_guard = self.sink.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(sink) = sink_guard.as_ref() {
             sink.set_volume(volume as f32);
         }
@@ -198,7 +198,7 @@ impl AudioStream {
     /// Get the current volume
     #[napi]
     pub fn get_volume(&self) -> f64 {
-        *self.volume.lock().unwrap() as f64
+        *self.volume.lock().unwrap_or_else(|e| e.into_inner()) as f64
     }
 
     /// Get supported stream configurations
@@ -227,7 +227,7 @@ impl AudioStream {
     where
         S: RodioSource<Item = f32> + Send + 'static,
     {
-        let sink_guard = self.sink.lock().unwrap();
+        let sink_guard = self.sink.lock().unwrap_or_else(|e| e.into_inner());
         if sink_guard.is_none() {
             return Err(Error::new(Status::InvalidArg, "Stream not initialized"));
         }
@@ -236,8 +236,8 @@ impl AudioStream {
         sink.append(source);
         sink.play();
 
-        *self.is_playing.lock().unwrap() = true;
-        *self.is_paused.lock().unwrap() = false;
+        *self.is_playing.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        *self.is_paused.lock().unwrap_or_else(|e| e.into_inner()) = false;
 
         Ok(())
     }

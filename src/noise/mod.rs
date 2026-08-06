@@ -23,14 +23,14 @@ impl BlueNoise {
 
     #[napi]
     pub fn get_samples(&self) -> Vec<i16> {
-        let samples = self.samples.lock().unwrap();
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
         samples.clone()
     }
 
     #[napi]
     pub fn get_next(&self) -> Option<i16> {
-        let mut pos = self.position.lock().unwrap();
-        let samples = self.samples.lock().unwrap();
+        let mut pos = self.position.lock().unwrap_or_else(|e| e.into_inner());
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
 
         if *pos >= samples.len() {
             return None;
@@ -42,7 +42,7 @@ impl BlueNoise {
 
     #[napi]
     pub fn reset(&self) {
-        *self.position.lock().unwrap() = 0;
+        *self.position.lock().unwrap_or_else(|e| e.into_inner()) = 0;
     }
 }
 
@@ -66,14 +66,14 @@ impl BrownianNoise {
 
     #[napi]
     pub fn get_samples(&self) -> Vec<i16> {
-        let samples = self.samples.lock().unwrap();
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
         samples.clone()
     }
 
     #[napi]
     pub fn get_next(&self) -> Option<i16> {
-        let mut pos = self.position.lock().unwrap();
-        let samples = self.samples.lock().unwrap();
+        let mut pos = self.position.lock().unwrap_or_else(|e| e.into_inner());
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
 
         if *pos >= samples.len() {
             return None;
@@ -85,7 +85,7 @@ impl BrownianNoise {
 
     #[napi]
     pub fn reset(&self) {
-        *self.position.lock().unwrap() = 0;
+        *self.position.lock().unwrap_or_else(|e| e.into_inner()) = 0;
     }
 }
 
@@ -109,14 +109,14 @@ impl PinkNoise {
 
     #[napi]
     pub fn get_samples(&self) -> Vec<i16> {
-        let samples = self.samples.lock().unwrap();
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
         samples.clone()
     }
 
     #[napi]
     pub fn get_next(&self) -> Option<i16> {
-        let mut pos = self.position.lock().unwrap();
-        let samples = self.samples.lock().unwrap();
+        let mut pos = self.position.lock().unwrap_or_else(|e| e.into_inner());
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
 
         if *pos >= samples.len() {
             return None;
@@ -128,7 +128,7 @@ impl PinkNoise {
 
     #[napi]
     pub fn reset(&self) {
-        *self.position.lock().unwrap() = 0;
+        *self.position.lock().unwrap_or_else(|e| e.into_inner()) = 0;
     }
 }
 
@@ -152,14 +152,14 @@ impl VelvetNoise {
 
     #[napi]
     pub fn get_samples(&self) -> Vec<i16> {
-        let samples = self.samples.lock().unwrap();
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
         samples.clone()
     }
 
     #[napi]
     pub fn get_next(&self) -> Option<i16> {
-        let mut pos = self.position.lock().unwrap();
-        let samples = self.samples.lock().unwrap();
+        let mut pos = self.position.lock().unwrap_or_else(|e| e.into_inner());
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
 
         if *pos >= samples.len() {
             return None;
@@ -171,7 +171,7 @@ impl VelvetNoise {
 
     #[napi]
     pub fn reset(&self) {
-        *self.position.lock().unwrap() = 0;
+        *self.position.lock().unwrap_or_else(|e| e.into_inner()) = 0;
     }
 }
 
@@ -195,14 +195,14 @@ impl VioletNoise {
 
     #[napi]
     pub fn get_samples(&self) -> Vec<i16> {
-        let samples = self.samples.lock().unwrap();
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
         samples.clone()
     }
 
     #[napi]
     pub fn get_next(&self) -> Option<i16> {
-        let mut pos = self.position.lock().unwrap();
-        let samples = self.samples.lock().unwrap();
+        let mut pos = self.position.lock().unwrap_or_else(|e| e.into_inner());
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
 
         if *pos >= samples.len() {
             return None;
@@ -214,7 +214,7 @@ impl VioletNoise {
 
     #[napi]
     pub fn reset(&self) {
-        *self.position.lock().unwrap() = 0;
+        *self.position.lock().unwrap_or_else(|e| e.into_inner()) = 0;
     }
 }
 
@@ -238,14 +238,14 @@ impl WhiteGaussianNoise {
 
     #[napi]
     pub fn get_samples(&self) -> Vec<i16> {
-        let samples = self.samples.lock().unwrap();
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
         samples.clone()
     }
 
     #[napi]
     pub fn get_next(&self) -> Option<i16> {
-        let mut pos = self.position.lock().unwrap();
-        let samples = self.samples.lock().unwrap();
+        let mut pos = self.position.lock().unwrap_or_else(|e| e.into_inner());
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
 
         if *pos >= samples.len() {
             return None;
@@ -257,7 +257,7 @@ impl WhiteGaussianNoise {
 
     #[napi]
     pub fn reset(&self) {
-        *self.position.lock().unwrap() = 0;
+        *self.position.lock().unwrap_or_else(|e| e.into_inner()) = 0;
     }
 }
 
@@ -281,14 +281,14 @@ impl WhiteTriangularNoise {
 
     #[napi]
     pub fn get_samples(&self) -> Vec<i16> {
-        let samples = self.samples.lock().unwrap();
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
         samples.clone()
     }
 
     #[napi]
     pub fn get_next(&self) -> Option<i16> {
-        let mut pos = self.position.lock().unwrap();
-        let samples = self.samples.lock().unwrap();
+        let mut pos = self.position.lock().unwrap_or_else(|e| e.into_inner());
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
 
         if *pos >= samples.len() {
             return None;
@@ -300,7 +300,7 @@ impl WhiteTriangularNoise {
 
     #[napi]
     pub fn reset(&self) {
-        *self.position.lock().unwrap() = 0;
+        *self.position.lock().unwrap_or_else(|e| e.into_inner()) = 0;
     }
 }
 
@@ -324,14 +324,14 @@ impl WhiteUniformNoise {
 
     #[napi]
     pub fn get_samples(&self) -> Vec<i16> {
-        let samples = self.samples.lock().unwrap();
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
         samples.clone()
     }
 
     #[napi]
     pub fn get_next(&self) -> Option<i16> {
-        let mut pos = self.position.lock().unwrap();
-        let samples = self.samples.lock().unwrap();
+        let mut pos = self.position.lock().unwrap_or_else(|e| e.into_inner());
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
 
         if *pos >= samples.len() {
             return None;
@@ -343,7 +343,7 @@ impl WhiteUniformNoise {
 
     #[napi]
     pub fn reset(&self) {
-        *self.position.lock().unwrap() = 0;
+        *self.position.lock().unwrap_or_else(|e| e.into_inner()) = 0;
     }
 }
 
@@ -360,7 +360,7 @@ fn generate_blue_noise(duration_ms: u32, sample_rate: u32, channels: u16) -> Vec
     // Blue noise has more high frequency content - we'll generate uniform noise
     // and then apply a high-pass filter effect
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let mut state: f64 = 0.0;
 
@@ -384,7 +384,7 @@ fn generate_brownian_noise(duration_ms: u32, sample_rate: u32, channels: u16) ->
     let mut samples = Vec::with_capacity(total_samples);
 
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let mut state: f64 = 0.0;
 
@@ -408,7 +408,7 @@ fn generate_pink_noise(duration_ms: u32, sample_rate: u32, channels: u16) -> Vec
     let mut samples = Vec::with_capacity(total_samples);
 
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     // Pink noise approximation using Paul Kellet's method
     let mut b0 = 0.0;
@@ -446,7 +446,7 @@ fn generate_velvet_noise(duration_ms: u32, sample_rate: u32, channels: u16) -> V
     let mut samples = Vec::with_capacity(total_samples);
 
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for _ in 0..total_samples {
         // Velvet noise - non-zero samples are rare and non-convex
@@ -469,7 +469,7 @@ fn generate_violet_noise(duration_ms: u32, sample_rate: u32, channels: u16) -> V
     let mut samples = Vec::with_capacity(total_samples);
 
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let mut state1: f64 = 0.0;
     let mut state2: f64 = 0.0;
@@ -501,13 +501,13 @@ fn generate_white_gaussian_noise(
     let mut samples = Vec::with_capacity(total_samples);
 
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let std_dev = std_dev.unwrap_or(1.0);
 
     for _ in 0..total_samples {
         // Box-Muller transform for Gaussian distribution
-        let u1: f64 = rng.gen();
-        let u2: f64 = rng.gen();
+        let u1: f64 = rng.random();
+        let u2: f64 = rng.random();
         let normal = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
 
         let scaled = normal * 32767.0 * std_dev;
@@ -525,7 +525,7 @@ fn generate_white_triangular_noise(duration_ms: u32, sample_rate: u32, channels:
     let mut samples = Vec::with_capacity(total_samples);
 
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for _ in 0..total_samples {
         // Triangular distribution - sum of two uniform
@@ -547,7 +547,7 @@ fn generate_white_uniform_noise(duration_ms: u32, sample_rate: u32, channels: u1
     let mut samples = Vec::with_capacity(total_samples);
 
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for _ in 0..total_samples {
         let sample = rng.gen::<i16>();

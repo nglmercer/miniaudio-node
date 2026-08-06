@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose, Engine as _};
+use cpal::traits::{DeviceTrait, HostTrait};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
 use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
@@ -11,6 +12,8 @@ use std::sync::{Arc, Mutex};
 use crate::debug_log;
 use crate::types::{AudioDeviceInfo, AudioPlayerConfig, PlaybackState};
 
+const DEVICE_ID_SEPARATOR: char = ':';
+
 /// Thread-safe audio player with rodio backend
 #[napi]
 pub struct AudioPlayer {
@@ -22,8 +25,12 @@ pub struct AudioPlayer {
     // OutputStream needs to be kept alive along with sink
     #[allow(dead_code)]
     output_stream: Arc<Mutex<Option<rodio::OutputStream>>>,
-    audio_buffer: Arc<Mutex<Option<Vec<u8>>>>,
-    // Real sample rate / channel count of the loaded buffer/content.
+    // Decoded PCM samples (f32, rodio's native sample type) for content
+    // loaded via loadBuffer/loadBase64. Storing decoded samples (instead of
+    // the encoded container bytes) makes duration reporting and seeking
+    // correct for any supported format.
+    audio_samples: Arc<Mutex<Option<Vec<f32>>>>,
+    // Real sample rate / channel count of the loaded buffer content.
     // Required to correctly seek within buffer sources (TTS audio is often
     // mono and not 44100 Hz, e.g. 22050 Hz pcm_s16le).
     buffer_sample_rate: u32,
@@ -44,7 +51,7 @@ impl Default for AudioPlayer {
             duration: Arc::new(Mutex::new(0.0)),
             sink: Arc::new(Mutex::new(None)),
             output_stream: Arc::new(Mutex::new(None)),
-            audio_buffer: Arc::new(Mutex::new(None)),
+            audio_samples: Arc::new(Mutex::new(None)),
             buffer_sample_rate: 0,
             buffer_channels: 0,
             initialized: false,
@@ -71,8 +78,8 @@ impl AudioPlayer {
         match OutputStreamBuilder::open_default_stream() {
             Ok(stream) => {
                 let sink = Sink::connect_new(stream.mixer());
-                *player.output_stream.lock().unwrap() = Some(stream);
-                *player.sink.lock().unwrap() = Some(sink);
+                *player.output_stream.lock().unwrap_or_else(|e| e.into_inner()) = Some(stream);
+                *player.sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(sink);
                 debug_log!("Audio stream initialized in constructor");
             }
             Err(e) => {
@@ -85,12 +92,50 @@ impl AudioPlayer {
 
     #[napi]
     pub fn get_devices(&self) -> Result<Vec<AudioDeviceInfo>> {
-        Ok(vec![AudioDeviceInfo {
-            id: "default".to_string(),
-            name: "Default Output Device".to_string(),
-            host: "default".to_string(),
-            is_default: true,
-        }])
+        let mut result = Vec::new();
+
+        for host_id in cpal::available_hosts() {
+            let host = match cpal::host_from_id(host_id) {
+                Ok(h) => h,
+                Err(_) => continue,
+            };
+
+            let host_name = format!("{:?}", host_id);
+            let devices = match host.output_devices() {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            let default_name = host
+                .default_output_device()
+                .and_then(|d| d.description().ok().map(|desc| desc.name().to_string()));
+
+            for (i, device) in devices.enumerate() {
+                let name = match device.description() {
+                    Ok(desc) => desc.name().to_string(),
+                    Err(_) => continue,
+                };
+                result.push(AudioDeviceInfo {
+                    id: format!("{}{}{}", host_name, DEVICE_ID_SEPARATOR, i),
+                    name: name.clone(),
+                    host: host_name.clone(),
+                    is_default: Some(name) == default_name,
+                });
+            }
+        }
+
+        // Fallback so callers always get at least one entry even when
+        // enumeration fails (e.g. no audio hardware in a container).
+        if result.is_empty() {
+            result.push(AudioDeviceInfo {
+                id: "default".to_string(),
+                name: "Default Output Device".to_string(),
+                host: "default".to_string(),
+                is_default: true,
+            });
+        }
+
+        Ok(result)
     }
 
     #[napi]
@@ -126,14 +171,14 @@ impl AudioPlayer {
             .unwrap_or(std::time::Duration::ZERO);
         let duration_seconds =
             duration.as_secs() as f64 + duration.subsec_nanos() as f64 / 1_000_000_000.0;
-        *self.duration.lock().unwrap() = duration_seconds;
+        *self.duration.lock().unwrap_or_else(|e| e.into_inner()) = duration_seconds;
 
         debug_log!(
             "File loaded successfully, duration: {} seconds",
             duration_seconds
         );
         self.current_file = Some(file_path);
-        *self.state.lock().unwrap() = PlaybackState::Loaded;
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackState::Loaded;
 
         Ok(())
     }
@@ -149,28 +194,48 @@ impl AudioPlayer {
         self.initialized = true;
         self.stop().ok();
 
-        let cursor = Cursor::new(audio_data.clone());
-        let decoder = Decoder::new(cursor).map_err(|e| {
+        let cursor = Cursor::new(audio_data);
+        let mut decoder = Decoder::new(cursor).map_err(|e| {
             Error::new(
                 Status::InvalidArg,
                 format!("Failed to decode buffer: {}", e),
             )
         })?;
 
-        // Capture the real format so buffer seeks use correct byte offsets.
+        // Capture the real format so buffer seeks use correct offsets.
         let buffer_sample_rate = decoder.sample_rate();
         let buffer_channels = decoder.channels();
 
-        *self.duration.lock().unwrap() = 0.0;
-        *self.audio_buffer.lock().unwrap() = Some(audio_data);
+        // Decode to PCM up-front so duration and seeking are accurate for
+        // any supported container (raw byte offsets into encoded data would
+        // land mid-frame or past the header and fail to decode).
+        let samples: Vec<f32> = decoder.collect();
+        if samples.is_empty() {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Buffer contained no decodable audio data",
+            ));
+        }
+
+        let duration_seconds = samples.len() as f64
+            / (buffer_sample_rate as f64 * buffer_channels.max(1) as f64);
+
+        *self.duration.lock().unwrap_or_else(|e| e.into_inner()) = duration_seconds;
+        *self.audio_samples.lock().unwrap_or_else(|e| e.into_inner()) = Some(samples);
         self.buffer_sample_rate = buffer_sample_rate;
         self.buffer_channels = buffer_channels;
         self.current_file = Some(format!(
             "__BUFFER__{}",
-            std::time::SystemTime::now().elapsed().unwrap().as_millis()
+            std::time::SystemTime::now()
+                .elapsed()
+                .unwrap_or_default()
+                .as_millis()
         ));
-        *self.state.lock().unwrap() = PlaybackState::Loaded;
-        debug_log!("Buffer loaded successfully");
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackState::Loaded;
+        debug_log!(
+            "Buffer loaded successfully, duration: {} seconds",
+            duration_seconds
+        );
 
         Ok(())
     }
@@ -195,7 +260,7 @@ impl AudioPlayer {
 
     #[napi]
     pub fn play(&mut self) -> Result<()> {
-        let has_buffer = self.audio_buffer.lock().unwrap().is_some();
+        let has_buffer = self.audio_samples.lock().unwrap_or_else(|e| e.into_inner()).is_some();
         let has_file = self.current_file.is_some();
 
         if !has_buffer && !has_file {
@@ -205,14 +270,14 @@ impl AudioPlayer {
 
         debug_log!(
             "Play called, current state: {:?}",
-            self.state.lock().unwrap().clone()
+            self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
         );
 
         // Track playback time
         {
-            let mut start_time_guard = self.start_time.lock().unwrap();
-            let mut total_paused_guard = self.total_paused_ns.lock().unwrap();
-            let current_state = self.state.lock().unwrap().clone();
+            let mut start_time_guard = self.start_time.lock().unwrap_or_else(|e| e.into_inner());
+            let mut total_paused_guard = self.total_paused_ns.lock().unwrap_or_else(|e| e.into_inner());
+            let current_state = self.state.lock().unwrap_or_else(|e| e.into_inner()).clone();
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or(std::time::Duration::ZERO)
@@ -233,8 +298,8 @@ impl AudioPlayer {
 
         // Always ensure sink is available - recreate if needed
         let sink_needs_source = {
-            let mut output_stream_guard = self.output_stream.lock().unwrap();
-            let mut sink_guard = self.sink.lock().unwrap();
+            let mut output_stream_guard = self.output_stream.lock().unwrap_or_else(|e| e.into_inner());
+            let mut sink_guard = self.sink.lock().unwrap_or_else(|e| e.into_inner());
 
             // Create new stream and sink if either is missing
             if sink_guard.is_none() || output_stream_guard.is_none() {
@@ -261,23 +326,46 @@ impl AudioPlayer {
         };
 
         // Append source and play
-        let sink_guard = self.sink.lock().unwrap();
+        let sink_guard = self.sink.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(sink) = sink_guard.as_ref() {
-            let volume = *self.volume.lock().unwrap();
+            let volume = *self.volume.lock().unwrap_or_else(|e| e.into_inner());
             sink.set_volume(volume);
             debug_log!("Setting volume to: {}", volume);
 
             if sink_needs_source || sink.empty() {
                 debug_log!("Sink is empty, appending source...");
-                if let Some(buffer_data) = self.audio_buffer.lock().unwrap().clone() {
-                    debug_log!("Playing from buffer ({} bytes)", buffer_data.len());
-                    let cursor = Cursor::new(buffer_data);
-                    let source = Decoder::new(cursor).unwrap();
+                if let Some(samples) = self.audio_samples.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+                    debug_log!("Playing from buffer ({} samples)", samples.len());
+                    let channels = if self.buffer_channels > 0 {
+                        self.buffer_channels
+                    } else {
+                        2
+                    };
+                    let sample_rate = if self.buffer_sample_rate > 0 {
+                        self.buffer_sample_rate
+                    } else {
+                        44100
+                    };
+                    let source = rodio::buffer::SamplesBuffer::new(
+                        channels,
+                        sample_rate,
+                        samples.into_iter(),
+                    );
                     sink.append(source);
                 } else if let Some(file_path) = &self.current_file {
                     debug_log!("Playing from file: {}", file_path);
-                    let file = File::open(file_path).unwrap();
-                    let source = Decoder::new(BufReader::new(file)).unwrap();
+                    let file = File::open(file_path).map_err(|e| {
+                        Error::new(
+                            Status::GenericFailure,
+                            format!("Failed to open file '{}': {}", file_path, e),
+                        )
+                    })?;
+                    let source = Decoder::new(BufReader::new(file)).map_err(|e| {
+                        Error::new(
+                            Status::GenericFailure,
+                            format!("Failed to decode file '{}': {}", file_path, e),
+                        )
+                    })?;
                     sink.append(source);
                 }
             } else {
@@ -287,7 +375,7 @@ impl AudioPlayer {
             debug_log!("Sink playing");
         }
 
-        *self.state.lock().unwrap() = PlaybackState::Playing;
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackState::Playing;
         debug_log!("State set to Playing");
 
         Ok(())
@@ -296,7 +384,7 @@ impl AudioPlayer {
     #[napi]
     pub fn pause(&mut self) -> Result<()> {
         debug_log!("Pause called");
-        let current_state = self.state.lock().unwrap().clone();
+        let current_state = self.state.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
         // If already paused or stopped with no sink, just update state
         if current_state == PlaybackState::Paused {
@@ -311,7 +399,7 @@ impl AudioPlayer {
 
         // Track pause start time
         {
-            let mut start_time_guard = self.start_time.lock().unwrap();
+            let mut start_time_guard = self.start_time.lock().unwrap_or_else(|e| e.into_inner());
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or(std::time::Duration::ZERO)
@@ -319,17 +407,17 @@ impl AudioPlayer {
             *start_time_guard = Some(now);
         }
 
-        let sink_guard = self.sink.lock().unwrap();
+        let sink_guard = self.sink.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(sink) = sink_guard.as_ref() {
             sink.pause();
-            *self.state.lock().unwrap() = PlaybackState::Paused;
+            *self.state.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackState::Paused;
             debug_log!("State set to Paused");
             Ok(())
         } else {
             // Sink doesn't exist but player is in Playing/Loaded state
             // This can happen after stop() was called but before play()
             // Just update state to Paused since there's nothing playing
-            *self.state.lock().unwrap() = PlaybackState::Paused;
+            *self.state.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackState::Paused;
             debug_log!("No sink available, state set to Paused anyway");
             Ok(())
         }
@@ -347,21 +435,21 @@ impl AudioPlayer {
 
         // Reset time tracking
         {
-            let mut start_time_guard = self.start_time.lock().unwrap();
-            let mut total_paused_guard = self.total_paused_ns.lock().unwrap();
+            let mut start_time_guard = self.start_time.lock().unwrap_or_else(|e| e.into_inner());
+            let mut total_paused_guard = self.total_paused_ns.lock().unwrap_or_else(|e| e.into_inner());
             *start_time_guard = None;
             *total_paused_guard = 0;
         }
 
-        if let Some(sink) = self.sink.lock().unwrap().as_ref() {
+        if let Some(sink) = self.sink.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             debug_log!("Stopping sink");
             sink.stop();
         }
-        *self.sink.lock().unwrap() = None;
-        *self.audio_buffer.lock().unwrap() = None;
+        *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.audio_samples.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.buffer_sample_rate = 0;
         self.buffer_channels = 0;
-        *self.state.lock().unwrap() = PlaybackState::Stopped;
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackState::Stopped;
         self.current_file = None;
         debug_log!("State set to Stopped");
         Ok(())
@@ -378,8 +466,8 @@ impl AudioPlayer {
             ));
         }
         let vol = volume as f32;
-        *self.volume.lock().unwrap() = vol;
-        if let Some(sink) = self.sink.lock().unwrap().as_ref() {
+        *self.volume.lock().unwrap_or_else(|e| e.into_inner()) = vol;
+        if let Some(sink) = self.sink.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             sink.set_volume(vol);
             debug_log!("Volume set on sink: {}", volume);
         }
@@ -388,12 +476,12 @@ impl AudioPlayer {
 
     #[napi]
     pub fn get_volume(&self) -> Result<f64> {
-        Ok(*self.volume.lock().unwrap() as f64)
+        Ok(*self.volume.lock().unwrap_or_else(|e| e.into_inner()) as f64)
     }
 
     #[napi]
     pub fn is_playing(&self) -> bool {
-        if let Some(sink) = self.sink.lock().unwrap().as_ref() {
+        if let Some(sink) = self.sink.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             !sink.is_paused() && !sink.empty()
         } else {
             false
@@ -402,28 +490,34 @@ impl AudioPlayer {
 
     #[napi]
     pub fn get_state(&self) -> PlaybackState {
-        self.state.lock().unwrap().clone()
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     #[napi]
     pub fn get_duration(&self) -> Result<f64> {
-        Ok(*self.duration.lock().unwrap())
+        Ok(*self.duration.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     #[napi]
     pub fn get_current_time(&self) -> Result<f64> {
-        let start_time_opt = *self.start_time.lock().unwrap();
+        let start_time_opt = *self.start_time.lock().unwrap_or_else(|e| e.into_inner());
 
         if let Some(start_time_ns) = start_time_opt {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or(std::time::Duration::ZERO)
                 .as_nanos();
-            let total_paused_ns = *self.total_paused_ns.lock().unwrap();
+            let total_paused_ns = *self.total_paused_ns.lock().unwrap_or_else(|e| e.into_inner());
             let playing_ns = now
                 .saturating_sub(start_time_ns)
                 .saturating_sub(total_paused_ns);
-            Ok(playing_ns as f64 / 1_000_000_000.0)
+            let mut current = playing_ns as f64 / 1_000_000_000.0;
+            // Clamp to duration so the clock stops when the track ends.
+            let duration = *self.duration.lock().unwrap_or_else(|e| e.into_inner());
+            if duration > 0.0 && current > duration {
+                current = duration;
+            }
+            Ok(current)
         } else {
             Ok(0.0)
         }
@@ -446,7 +540,7 @@ impl AudioPlayer {
             ));
         }
 
-        let duration = *self.duration.lock().unwrap();
+        let duration = *self.duration.lock().unwrap_or_else(|e| e.into_inner());
         // Use a small epsilon for floating point comparison
         let epsilon = 1e-9;
         if position < -epsilon || position > duration + epsilon {
@@ -461,7 +555,7 @@ impl AudioPlayer {
 
         // Check if we have a source to seek within
         let has_file = self.current_file.is_some();
-        let has_buffer = self.audio_buffer.lock().unwrap().is_some();
+        let has_buffer = self.audio_samples.lock().unwrap_or_else(|e| e.into_inner()).is_some();
 
         if !has_file && !has_buffer {
             debug_log!("Seek called but no audio loaded");
@@ -470,19 +564,19 @@ impl AudioPlayer {
 
         // Stop current playback without clearing source info
         {
-            let sink_guard = self.sink.lock().unwrap();
+            let sink_guard = self.sink.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(sink) = sink_guard.as_ref() {
                 sink.stop();
             }
         }
-        *self.sink.lock().unwrap() = None;
-        *self.state.lock().unwrap() = PlaybackState::Stopped;
+        *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackState::Stopped;
         debug_log!("Sink stopped for seek");
 
         // Reset time tracking for new playback position
         {
-            let mut start_time_guard = self.start_time.lock().unwrap();
-            let mut total_paused_guard = self.total_paused_ns.lock().unwrap();
+            let mut start_time_guard = self.start_time.lock().unwrap_or_else(|e| e.into_inner());
+            let mut total_paused_guard = self.total_paused_ns.lock().unwrap_or_else(|e| e.into_inner());
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or(std::time::Duration::ZERO)
@@ -497,8 +591,8 @@ impl AudioPlayer {
 
         // Recreate output stream and sink only if needed
         {
-            let output_stream_guard = self.output_stream.lock().unwrap();
-            let sink_guard = self.sink.lock().unwrap();
+            let output_stream_guard = self.output_stream.lock().unwrap_or_else(|e| e.into_inner());
+            let sink_guard = self.sink.lock().unwrap_or_else(|e| e.into_inner());
 
             if sink_guard.is_none() || output_stream_guard.is_none() {
                 drop(sink_guard);
@@ -513,16 +607,16 @@ impl AudioPlayer {
                 })?;
 
                 let sink_new = Sink::connect_new(stream.mixer());
-                *self.output_stream.lock().unwrap() = Some(stream);
-                *self.sink.lock().unwrap() = Some(sink_new);
+                *self.output_stream.lock().unwrap_or_else(|e| e.into_inner()) = Some(stream);
+                *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(sink_new);
                 debug_log!("Output stream and sink recreated for seek");
             }
         }
 
         // Create source with skip and append to sink
-        let sink_guard = self.sink.lock().unwrap();
+        let sink_guard = self.sink.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(sink) = sink_guard.as_ref() {
-            let volume = *self.volume.lock().unwrap();
+            let volume = *self.volume.lock().unwrap_or_else(|e| e.into_inner());
             sink.set_volume(volume);
 
             if let Some(ref file_path) = self.current_file {
@@ -547,11 +641,11 @@ impl AudioPlayer {
                 let source = decoder.skip_duration(skip_duration);
                 sink.append(source);
                 debug_log!("File source appended with skip to position: {}s", position);
-            } else if let Some(ref buffer_data) = *self.audio_buffer.lock().unwrap() {
-                // For buffer sources, we skip bytes based on the actual format
-                // of the loaded content. TTS-generated audio is commonly mono
-                // and not 44100 Hz (e.g. 22050 Hz pcm_s16le), so we must use the
-                // real sample rate and channel count instead of hard-coded values.
+            } else if let Some(samples) = self.audio_samples.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+                // Buffer content is stored as decoded PCM, so seeking is a
+                // simple sample-offset skip using the real format of the
+                // loaded content (TTS audio is commonly mono and not
+                // 44100 Hz, e.g. 22050 Hz pcm_s16le).
                 let channels = if self.buffer_channels > 0 {
                     self.buffer_channels
                 } else {
@@ -562,17 +656,16 @@ impl AudioPlayer {
                 } else {
                     44100
                 };
-                let skip_bytes = buffer_skip_bytes(sample_rate, channels, position, buffer_data.len());
+                let skip_samples =
+                    buffer_skip_samples(sample_rate, channels, position, samples.len());
 
-                let cursor = Cursor::new(buffer_data[skip_bytes..].to_vec());
-                let decoder = Decoder::new(cursor).map_err(|e| {
-                    Error::new(
-                        Status::GenericFailure,
-                        format!("Failed to create decoder: {}", e),
-                    )
-                })?;
-
-                sink.append(decoder);
+                let samples_f32: Vec<f32> = samples[skip_samples..]
+                    .iter()
+                    .map(|&s| s as f32 / 32768.0)
+                    .collect();
+                let source =
+                    rodio::buffer::SamplesBuffer::new(channels, sample_rate, samples_f32);
+                sink.append(source);
                 debug_log!(
                     "Buffer source appended with skip to position: {}s",
                     position
@@ -580,7 +673,7 @@ impl AudioPlayer {
             }
 
             sink.play();
-            *self.state.lock().unwrap() = PlaybackState::Playing;
+            *self.state.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackState::Playing;
             debug_log!("Seek complete, playing from position: {}s", position);
         }
 
@@ -618,19 +711,18 @@ pub fn quick_play(file_path: String, config: Option<AudioPlayerConfig>) -> Resul
     Ok(player)
 }
 
-/// Compute the byte offset to skip when seeking within interleaved 16-bit PCM
-/// buffer data (e.g. a decoded WAV in memory).
+/// Compute the interleaved-sample offset to skip when seeking within decoded
+/// PCM buffer data.
 ///
 /// `sample_rate` and `channels` are the *real* format of the loaded audio.
 /// Using incorrect values (the previous hard-coded `44100 Hz` / stereo) makes
 /// seeking TTS-generated audio (commonly mono, e.g. 22050 Hz) land at the
 /// wrong position or skip past the end of the data entirely.
-fn buffer_skip_bytes(sample_rate: u32, channels: u16, position: f64, data_len: usize) -> usize {
+fn buffer_skip_samples(sample_rate: u32, channels: u16, position: f64, samples_len: usize) -> usize {
     let channels = (channels as u64).max(1);
-    let bytes_per_sample = 2u64 * channels; // 16-bit samples
-    let bytes_per_second = bytes_per_sample * sample_rate as u64;
-    let skip = (position * bytes_per_second as f64) as usize;
-    skip.min(data_len)
+    let samples_per_second = channels * sample_rate as u64;
+    let skip = (position * samples_per_second as f64) as usize;
+    skip.min(samples_len)
 }
 
 #[cfg(test)]
@@ -638,40 +730,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_buffer_skip_bytes_mono_22050_tts() {
-        // TTS curl output: mono, 22050 Hz, pcm_s16le (2 bytes/sample).
+    fn test_buffer_skip_samples_mono_22050_tts() {
+        // TTS output: mono, 22050 Hz pcm_s16le.
         let sample_rate = 22050u32;
         let channels = 1u16;
-        let data_len = 22050 * 2 + 44; // ~1s plus WAV header
+        let samples_len = 22050; // 1s of mono audio
 
-        // 0.5s * 22050 * 2 = 22050 bytes
-        assert_eq!(buffer_skip_bytes(sample_rate, channels, 0.5, data_len), 22050);
+        // 0.5s * 22050 = 11025 samples
+        assert_eq!(buffer_skip_samples(sample_rate, channels, 0.5, samples_len), 11025);
 
-        // 1.0s * 22050 * 2 = 44100 bytes
-        assert_eq!(buffer_skip_bytes(sample_rate, channels, 1.0, data_len), 44100);
+        // 1.0s * 22050 = 22050 samples
+        assert_eq!(buffer_skip_samples(sample_rate, channels, 1.0, samples_len), 22050);
 
-        // Seeking past the end is clamped to data length.
+        // Seeking past the end is clamped to the sample count.
         assert_eq!(
-            buffer_skip_bytes(sample_rate, channels, 100.0, data_len),
-            data_len
+            buffer_skip_samples(sample_rate, channels, 100.0, samples_len),
+            samples_len
         );
     }
 
     #[test]
-    fn test_buffer_skip_bytes_stereo_44100() {
+    fn test_buffer_skip_samples_stereo_44100() {
         let sample_rate = 44100u32;
         let channels = 2u16;
 
-        // 1.0s * 44100 * 4 = 176400 bytes
+        // 1.0s * 44100 * 2 = 88200 interleaved samples
         assert_eq!(
-            buffer_skip_bytes(sample_rate, channels, 1.0, usize::MAX),
-            176400
+            buffer_skip_samples(sample_rate, channels, 1.0, usize::MAX),
+            88200
         );
     }
 
     #[test]
-    fn test_buffer_skip_bytes_zero_channels_falls_back_to_one() {
+    fn test_buffer_skip_samples_zero_channels_falls_back_to_one() {
         // Guard against a buffer with 0 channels (should never happen).
-        assert_eq!(buffer_skip_bytes(22050, 0, 0.5, usize::MAX), 22050);
+        assert_eq!(buffer_skip_samples(22050, 0, 0.5, usize::MAX), 11025);
     }
 }

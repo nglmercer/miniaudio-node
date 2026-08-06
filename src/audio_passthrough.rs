@@ -84,7 +84,7 @@ impl AudioPassthrough {
             );
         });
 
-        *self.on_levels_callback.lock().unwrap() = Some(cb);
+        *self.on_levels_callback.lock().unwrap_or_else(|e| e.into_inner()) = Some(cb);
         Ok(())
     }
 
@@ -159,7 +159,7 @@ impl AudioPassthrough {
         let ring = HeapRb::<f32>::new(buffer_size as usize);
 
         {
-            let mut rb_guard = self.ring_buffer.lock().unwrap();
+            let mut rb_guard = self.ring_buffer.lock().unwrap_or_else(|e| e.into_inner());
             *rb_guard = Some(ring);
         }
 
@@ -272,7 +272,7 @@ impl AudioPassthrough {
                 &stream_config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                     if is_running_out.load(Ordering::SeqCst) {
-                        let mut rb_guard = ring_buffer_out.lock().unwrap();
+                        let mut rb_guard = ring_buffer_out.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(rb) = rb_guard.as_mut() {
                             // Use pop_iter to get samples - it handles available samples internally
                             use ringbuf::traits::Consumer;
@@ -343,7 +343,7 @@ impl AudioPassthrough {
 
         // Clear ring buffer
         {
-            let mut rb_guard = self.ring_buffer.lock().unwrap();
+            let mut rb_guard = self.ring_buffer.lock().unwrap_or_else(|e| e.into_inner());
             *rb_guard = None;
         }
 
@@ -360,8 +360,8 @@ impl AudioPassthrough {
     #[napi]
     pub fn get_levels(&self) -> AudioLevels {
         AudioLevels {
-            peak: *self.last_peak.lock().unwrap(),
-            rms: *self.last_rms.lock().unwrap(),
+            peak: *self.last_peak.lock().unwrap_or_else(|e| e.into_inner()),
+            rms: *self.last_rms.lock().unwrap_or_else(|e| e.into_inner()),
         }
     }
 
@@ -548,17 +548,17 @@ fn process_input_data(
 
     // Update last levels
     {
-        let mut peak_guard = last_peak.lock().unwrap();
+        let mut peak_guard = last_peak.lock().unwrap_or_else(|e| e.into_inner());
         *peak_guard = peak as f64;
     }
     {
-        let mut rms_guard = last_rms.lock().unwrap();
+        let mut rms_guard = last_rms.lock().unwrap_or_else(|e| e.into_inner());
         *rms_guard = rms as f64;
     }
 
     // Emit callback
     {
-        let callback_guard = on_levels.lock().unwrap();
+        let callback_guard = on_levels.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(cb) = callback_guard.as_ref() {
             cb(AudioLevels {
                 peak: peak as f64,
@@ -569,7 +569,7 @@ fn process_input_data(
 
     // Push to ring buffer
     {
-        let mut rb_guard = ring_buffer.lock().unwrap();
+        let mut rb_guard = ring_buffer.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(rb) = rb_guard.as_mut() {
             use ringbuf::traits::Producer;
             // Use push_slice for more efficient bulk insert

@@ -101,7 +101,7 @@ impl AudioDecoder {
             }
             None => {
                 let data = {
-                    let data_guard = self.data.lock().unwrap();
+                    let data_guard = self.data.lock().unwrap_or_else(|e| e.into_inner());
                     data_guard.as_ref().cloned()
                 };
                 if let Some(data) = data {
@@ -130,7 +130,7 @@ impl AudioDecoder {
             let samples_i16: Vec<i16> = samples.into_iter().map(|s| (s * 32767.0) as i16).collect();
             Ok(samples_i16)
         } else {
-            let data_guard = self.data.lock().unwrap();
+            let data_guard = self.data.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(data) = data_guard.as_ref() {
                 let cursor = Cursor::new(data.clone());
                 let source = Decoder::new(cursor).map_err(|e| {
@@ -254,7 +254,7 @@ impl LoopedDecoder {
                 duration: 0.0,
             })
         } else {
-            let data_guard = self.decoder.data.lock().unwrap();
+            let data_guard = self.decoder.data.lock().unwrap_or_else(|e| e.into_inner());
             let data = data_guard.as_ref().cloned().unwrap_or_default();
             AudioDecoder::from_data(data).unwrap_or_else(|_| AudioDecoder {
                 data: Arc::new(Mutex::new(None)),

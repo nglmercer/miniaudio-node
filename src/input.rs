@@ -202,7 +202,7 @@ impl AudioRecorder {
             );
         });
 
-        *self.on_data_callback.lock().unwrap() = Some(cb);
+        *self.on_data_callback.lock().unwrap_or_else(|e| e.into_inner()) = Some(cb);
         Ok(())
     }
 
@@ -210,7 +210,7 @@ impl AudioRecorder {
     pub fn set_ring_buffer_size(&self, size_samples: u32) {
         use ringbuf::HeapRb;
         let rb = HeapRb::<i16>::new(size_samples as usize);
-        *self.ring_buffer.lock().unwrap() = Some(rb);
+        *self.ring_buffer.lock().unwrap_or_else(|e| e.into_inner()) = Some(rb);
     }
 
     #[napi]
@@ -293,7 +293,7 @@ impl AudioRecorder {
 
         // Reserve for 10 seconds of audio by default.
         {
-            let mut samples = recorded_samples.lock().unwrap();
+            let mut samples = recorded_samples.lock().unwrap_or_else(|e| e.into_inner());
             samples.clear();
             let reserve_size =
                 (self.sample_rate * self.channels as u32 * DEFAULT_RESERVE_SECONDS) as usize;
@@ -331,21 +331,21 @@ impl AudioRecorder {
                 }
 
                 {
-                    *last_peak.lock().unwrap() = peak as f64;
+                    *last_peak.lock().unwrap_or_else(|e| e.into_inner()) = peak as f64;
                     if !data.is_empty() {
-                        *last_rms.lock().unwrap() = (sum_sq / data.len() as f64).sqrt();
+                        *last_rms.lock().unwrap_or_else(|e| e.into_inner()) = (sum_sq / data.len() as f64).sqrt();
                     }
                 }
 
                 // Fill full history
                 {
-                    let mut samples = recorded_samples.lock().unwrap();
+                    let mut samples = recorded_samples.lock().unwrap_or_else(|e| e.into_inner());
                     samples.extend_from_slice(data);
                 }
 
                 // Fill ring buffer
                 {
-                    let mut rb_guard = ring_buffer.lock().unwrap();
+                    let mut rb_guard = ring_buffer.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(rb) = rb_guard.as_mut() {
                         use ringbuf::traits::Producer;
                         let _ = rb.push_slice(data);
@@ -354,7 +354,7 @@ impl AudioRecorder {
 
                 // Emit callback
                 {
-                    let callback_guard = on_data.lock().unwrap();
+                    let callback_guard = on_data.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(cb) = callback_guard.as_ref() {
                         cb(data.to_vec());
                     }
@@ -453,7 +453,7 @@ impl AudioRecorder {
 
     #[napi]
     pub fn get_buffer(&self) -> Result<SamplesBuffer> {
-        let samples = self.recorded_samples.lock().unwrap().clone();
+        let samples = self.recorded_samples.lock().unwrap_or_else(|e| e.into_inner()).clone();
         Ok(SamplesBuffer::create(
             self.channels as u32,
             self.sample_rate,
@@ -464,7 +464,7 @@ impl AudioRecorder {
     #[napi]
     pub fn get_ring_buffer_samples(&self) -> Result<Vec<i16>> {
         use ringbuf::traits::Consumer;
-        let mut rb_guard = self.ring_buffer.lock().unwrap();
+        let mut rb_guard = self.ring_buffer.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(rb) = rb_guard.as_mut() {
             let samples: Vec<i16> = rb.pop_iter().collect();
             Ok(samples)
@@ -475,7 +475,7 @@ impl AudioRecorder {
 
     #[napi]
     pub fn clear(&mut self) {
-        self.recorded_samples.lock().unwrap().clear();
+        self.recorded_samples.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
     #[napi]
@@ -490,8 +490,8 @@ impl AudioRecorder {
     #[napi]
     pub fn get_levels(&self) -> AudioLevels {
         AudioLevels {
-            peak: *self.last_peak.lock().unwrap(),
-            rms: *self.last_rms.lock().unwrap(),
+            peak: *self.last_peak.lock().unwrap_or_else(|e| e.into_inner()),
+            rms: *self.last_rms.lock().unwrap_or_else(|e| e.into_inner()),
         }
     }
 }

@@ -45,7 +45,7 @@ impl SamplesBuffer {
     /// Get the number of samples in this buffer
     #[napi]
     pub fn get_len(&self) -> u32 {
-        let samples = self.samples.lock().unwrap();
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
         samples.len() as u32
     }
 
@@ -58,7 +58,7 @@ impl SamplesBuffer {
     /// Get a copy of the samples in this buffer
     #[napi]
     pub fn get_samples(&self) -> Vec<i16> {
-        let samples = self.samples.lock().unwrap();
+        let samples = self.samples.lock().unwrap_or_else(|e| e.into_inner());
         samples.clone()
     }
 
@@ -81,7 +81,7 @@ impl SamplesBuffer {
             .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;
 
         let sink = Sink::connect_new(stream.mixer());
-        let samples_i16 = self.samples.lock().unwrap().clone();
+        let samples_i16 = self.samples.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
         // Convert i16 samples to f32 for rodio
         let samples_f32: Vec<f32> = samples_i16

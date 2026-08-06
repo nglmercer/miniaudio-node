@@ -43,7 +43,7 @@ impl Mixer {
     /// Add an audio source to the mixer
     #[napi]
     pub fn add_source(&self, source: &MixerSource) -> Result<()> {
-        let mut sources = self.sources.lock().unwrap();
+        let mut sources = self.sources.lock().unwrap_or_else(|e| e.into_inner());
         if sources.len() >= self.max_sources {
             return Err(Error::new(
                 Status::GenericFailure,
@@ -57,7 +57,7 @@ impl Mixer {
     /// Remove a source by its ID
     #[napi]
     pub fn remove_source(&self, source_id: String) -> Result<()> {
-        let mut sources = self.sources.lock().unwrap();
+        let mut sources = self.sources.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(pos) = sources.iter().position(|s| s.id == source_id) {
             sources.remove(pos);
             Ok(())
@@ -69,26 +69,26 @@ impl Mixer {
     /// Get all current sources
     #[napi]
     pub fn get_sources(&self) -> Vec<MixerSource> {
-        self.sources.lock().unwrap().to_vec()
+        self.sources.lock().unwrap_or_else(|e| e.into_inner()).to_vec()
     }
 
     /// Get the number of sources
     #[napi]
     pub fn get_source_count(&self) -> u32 {
-        self.sources.lock().unwrap().len() as u32
+        self.sources.lock().unwrap_or_else(|e| e.into_inner()).len() as u32
     }
 
     /// Clear all sources
     #[napi]
     pub fn clear(&self) {
-        self.sources.lock().unwrap().clear();
+        self.sources.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
     /// Mix all sources at a specific time point (synchronous operation)
     /// Returns a buffer of mixed samples
     #[napi]
     pub fn sample_at(&self, time_ms: u32) -> Result<Vec<i16>> {
-        let sources = self.sources.lock().unwrap();
+        let sources = self.sources.lock().unwrap_or_else(|e| e.into_inner());
         if sources.is_empty() {
             return Ok(vec![]);
         }
@@ -125,7 +125,7 @@ impl Mixer {
     pub fn start_mixing(&self) -> Result<()> {
         // In a real implementation, this would start an audio thread
         // For now, we just verify we have something to mix
-        let sources = self.sources.lock().unwrap();
+        let sources = self.sources.lock().unwrap_or_else(|e| e.into_inner());
         if sources.is_empty() {
             return Err(Error::new(Status::InvalidArg, "No sources to mix"));
         }
@@ -157,14 +157,14 @@ impl Mixer {
                 "Volume must be between 0.0 and 1.0",
             ));
         }
-        *self.volume.lock().unwrap() = volume as f32;
+        *self.volume.lock().unwrap_or_else(|e| e.into_inner()) = volume as f32;
         Ok(())
     }
 
     /// Get the master volume
     #[napi]
     pub fn get_master_volume(&self) -> f64 {
-        *self.volume.lock().unwrap() as f64
+        *self.volume.lock().unwrap_or_else(|e| e.into_inner()) as f64
     }
 }
 
@@ -245,14 +245,14 @@ impl MixerSource {
                 "Volume must be between 0.0 and 1.0",
             ));
         }
-        *self.volume.lock().unwrap() = volume as f32;
+        *self.volume.lock().unwrap_or_else(|e| e.into_inner()) = volume as f32;
         Ok(())
     }
 
     /// Get volume
     #[napi]
     pub fn get_volume(&self) -> f64 {
-        *self.volume.lock().unwrap() as f64
+        *self.volume.lock().unwrap_or_else(|e| e.into_inner()) as f64
     }
 
     /// Set pan (-1.0 left, 0.0 center, 1.0 right)
@@ -264,26 +264,26 @@ impl MixerSource {
                 "Pan must be between -1.0 and 1.0",
             ));
         }
-        *self.pan.lock().unwrap() = pan as f32;
+        *self.pan.lock().unwrap_or_else(|e| e.into_inner()) = pan as f32;
         Ok(())
     }
 
     /// Get pan
     #[napi]
     pub fn get_pan(&self) -> f64 {
-        *self.pan.lock().unwrap() as f64
+        *self.pan.lock().unwrap_or_else(|e| e.into_inner()) as f64
     }
 
     /// Enable or disable source
     #[napi]
     pub fn set_enabled(&mut self, enabled: bool) {
-        *self.enabled.lock().unwrap() = enabled;
+        *self.enabled.lock().unwrap_or_else(|e| e.into_inner()) = enabled;
     }
 
     /// Check if source is enabled
     #[napi]
     pub fn is_enabled(&self) -> bool {
-        *self.enabled.lock().unwrap()
+        *self.enabled.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Get duration in milliseconds
