@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-08-06 🛠️ Audit Fixes & Stability
+
+### 🐛 Bug Fixes
+
+- **Fixed crash on playback**: `play()` no longer panics when a loaded file is deleted or becomes unreadable — it now throws a proper error instead of crashing the process
+- **Fixed buffer seeking**: `seekTo()` now works for audio loaded via `loadBuffer`/`loadBase64` (seeks land at the correct position instead of failing to decode)
+- **Fixed buffer duration**: `getDuration()` now returns the real duration for buffer-loaded audio (previously always `0`)
+- **Fixed `getDevices()`**: returns the real output devices from the system instead of a hard-coded placeholder
+- **Fixed `getCurrentTime()`**: playback clock is now clamped to the track duration after playback ends
+
+### 🔧 Maintenance
+
+- Removed dead, never-compiled `src/source.rs` module (737 lines of unreferenced code)
+- Mutex locks recover from poisoning instead of panicking
+- Synced crate version with npm package (`1.6.0`)
+- Updated dependencies: `base64 0.22`, `rand 0.9`
+- Added root `LICENSE` file (was only in `docs/`, breaking the README link and npm publishing)
+- Fixed README inaccuracies: supported formats (no M4A/AAC), `PlaybackState` string enum, test count, API tables, npm scripts
+
 ## [1.0.2] - 2025-01-08 🐛 Critical Bug Fixes & API Enhancements
 
 ### 🐛 Bug Fixes

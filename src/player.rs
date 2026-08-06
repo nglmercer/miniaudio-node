@@ -195,7 +195,7 @@ impl AudioPlayer {
         self.stop().ok();
 
         let cursor = Cursor::new(audio_data);
-        let mut decoder = Decoder::new(cursor).map_err(|e| {
+        let decoder = Decoder::new(cursor).map_err(|e| {
             Error::new(
                 Status::InvalidArg,
                 format!("Failed to decode buffer: {}", e),
@@ -346,11 +346,8 @@ impl AudioPlayer {
                     } else {
                         44100
                     };
-                    let source = rodio::buffer::SamplesBuffer::new(
-                        channels,
-                        sample_rate,
-                        samples.into_iter(),
-                    );
+                    let source =
+                        rodio::buffer::SamplesBuffer::new(channels, sample_rate, samples);
                     sink.append(source);
                 } else if let Some(file_path) = &self.current_file {
                     debug_log!("Playing from file: {}", file_path);
@@ -659,12 +656,11 @@ impl AudioPlayer {
                 let skip_samples =
                     buffer_skip_samples(sample_rate, channels, position, samples.len());
 
-                let samples_f32: Vec<f32> = samples[skip_samples..]
-                    .iter()
-                    .map(|&s| s as f32 / 32768.0)
-                    .collect();
-                let source =
-                    rodio::buffer::SamplesBuffer::new(channels, sample_rate, samples_f32);
+                let source = rodio::buffer::SamplesBuffer::new(
+                    channels,
+                    sample_rate,
+                    samples[skip_samples..].to_vec(),
+                );
                 sink.append(source);
                 debug_log!(
                     "Buffer source appended with skip to position: {}s",

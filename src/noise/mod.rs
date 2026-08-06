@@ -366,7 +366,7 @@ fn generate_blue_noise(duration_ms: u32, sample_rate: u32, channels: u16) -> Vec
 
     for _ in 0..total_samples {
         // Generate random, differentiate to get high frequencies
-        let input = rng.gen::<f64>() * 2.0 - 1.0; // -1 to 1
+        let input = rng.random::<f64>() * 2.0 - 1.0; // -1 to 1
         let output = input - state;
         state = input;
 
@@ -390,7 +390,7 @@ fn generate_brownian_noise(duration_ms: u32, sample_rate: u32, channels: u16) ->
 
     for _ in 0..total_samples {
         // Random walk - accumulate small changes
-        let delta = rng.gen::<f64>() * 2.0 - 1.0; // -1 to 1
+        let delta = rng.random::<f64>() * 2.0 - 1.0; // -1 to 1
         state += delta * 0.1; // Integrate
         state = state.clamp(-1.0, 1.0); // Clamp
 
@@ -420,7 +420,7 @@ fn generate_pink_noise(duration_ms: u32, sample_rate: u32, channels: u16) -> Vec
     let mut b6 = 0.0;
 
     for _ in 0..total_samples {
-        let white = rng.gen::<f64>() * 2.0 - 1.0;
+        let white = rng.random::<f64>() * 2.0 - 1.0;
 
         b0 = 0.99886 * b0 + white * 0.0555179;
         b1 = 0.99332 * b1 + white * 0.0750759;
@@ -450,8 +450,8 @@ fn generate_velvet_noise(duration_ms: u32, sample_rate: u32, channels: u16) -> V
 
     for _ in 0..total_samples {
         // Velvet noise - non-zero samples are rare and non-convex
-        let sample = if rng.gen_bool(0.05) {
-            let value = rng.gen::<f64>() * 2.0 - 1.0;
+        let sample = if rng.random_bool(0.05) {
+            let value = rng.random::<f64>() * 2.0 - 1.0;
             (value * 32767.0) as i16
         } else {
             0
@@ -476,7 +476,7 @@ fn generate_violet_noise(duration_ms: u32, sample_rate: u32, channels: u16) -> V
 
     for _ in 0..total_samples {
         // Violet noise - second order difference of white noise
-        let input = rng.gen::<f64>() * 2.0 - 1.0;
+        let input = rng.random::<f64>() * 2.0 - 1.0;
         let diff1 = input - state1;
         let diff2 = diff1 - state2;
         state1 = input;
@@ -529,8 +529,8 @@ fn generate_white_triangular_noise(duration_ms: u32, sample_rate: u32, channels:
 
     for _ in 0..total_samples {
         // Triangular distribution - sum of two uniform
-        let u1 = rng.gen::<f64>() * 2.0 - 1.0;
-        let u2 = rng.gen::<f64>() * 2.0 - 1.0;
+        let u1 = rng.random::<f64>() * 2.0 - 1.0;
+        let u2 = rng.random::<f64>() * 2.0 - 1.0;
         let triangular = u1 + u2;
 
         let sample = (triangular * 16384.0).clamp(-32768.0, 32767.0) as i16;
@@ -550,7 +550,7 @@ fn generate_white_uniform_noise(duration_ms: u32, sample_rate: u32, channels: u1
     let mut rng = rand::rng();
 
     for _ in 0..total_samples {
-        let sample = rng.gen::<i16>();
+        let sample = rng.random::<i16>();
         samples.push(sample);
     }
 

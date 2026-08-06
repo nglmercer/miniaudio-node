@@ -33,7 +33,7 @@ impl Pink {
         let mut b6: f64 = 0.0;
 
         for _ in 0..total_samples {
-            let white = rng.gen::<f64>() * 2.0 - 1.0;
+            let white = rng.random::<f64>() * 2.0 - 1.0;
 
             b0 = 0.99886 * b0 + white * 0.0555179;
             b1 = 0.99332 * b1 + white * 0.0750759;

@@ -3,7 +3,7 @@
 [![npm version](https://badge.fury.io/js/miniaudio_node.svg)](https://badge.fury.io/js/miniaudio_node)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/nglmercer/miniaudio-node)
-[![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
 [![Bun](https://img.shields.io/badge/bun-1.0+-ff69b4.svg)](https://bun.sh)
 
 > High-performance native audio playback for Bun/Node.js. Built with Rust and the powerful rodio audio engine.
@@ -11,13 +11,13 @@
 ## ✨ Features
 
 - 🚀 **Lightning Fast** - Native Rust performance with minimal overhead
-- 🎵 **Multi-Format Support** - WAV, MP3, FLAC, OGG, M4A, AAC audio formats
+- 🎵 **Multi-Format Support** - WAV, MP3, FLAC, and OGG (Vorbis) audio formats
 - 🔊 **Full Playback Control** - Play, pause, stop, and volume adjustment
 - 🌍 **Cross-Platform** - Windows, macOS, and Linux support
 - 📝 **TypeScript Ready** - Full type definitions included
 - 🛡️ **Memory Safe** - Rust's ownership system prevents memory leaks
 - ⚡ **Bun Optimized** - Built for Bun's high-performance runtime
-- 🧪 **Well Tested** - Comprehensive test suite with Bun test (58/58 passing)
+- 🧪 **Well Tested** - Comprehensive test suite with Bun test (53/53 passing)
 - 📦 **Zero Dependencies** - No external audio runtime required
 - 🔧 **Helper Functions** - Convenient `createAudioPlayer` and `quickPlay` utilities
 
@@ -227,6 +227,7 @@ const player = new AudioPlayer()
 | `getDevices()` | Get audio devices | `none` | `AudioDeviceInfo[]` |
 | `getDuration()` | Get audio duration | `none` | `number` |
 | `getCurrentTime()` | Get playback position | `none` | `number` |
+| `seekTo(position)` | Seek to position (seconds) and resume playback | `number` - 0.0 to duration | `void` |
 | `getState()` | Get current playback state | `none` | `PlaybackState` |
 | `getCurrentFile()` | Get loaded file path | `none` | `string \| null` |
 
@@ -261,11 +262,13 @@ getAudioInfo(): string
 interface AudioPlayerConfig {
   volume?: number
   autoPlay?: boolean
+  debug?: boolean
 }
 
 interface AudioDeviceInfo {
   id: string
   name: string
+  host: string
   isDefault: boolean
 }
 
@@ -276,13 +279,31 @@ interface AudioMetadata {
   album?: string | null
 }
 
+// String enum — values are the member names themselves
 enum PlaybackState {
-  Stopped = 0,
-  Loaded = 1,
-  Playing = 2,
-  Paused = 3
+  Stopped = 'Stopped',
+  Loaded = 'Loaded',
+  Playing = 'Playing',
+  Paused = 'Paused'
 }
 ```
+
+### Beyond AudioPlayer
+
+The package also exposes lower-level building blocks (all fully typed in `index.d.ts`):
+
+| Class / Function | Purpose |
+|------------------|---------|
+| `AudioRecorder` | Record audio from an input device (with levels + ring buffer) |
+| `AudioPassthrough`, `startPassthrough()` | Real-time input → output loopback |
+| `AudioStream`, `AudioStreamBuilder`, `play()` | Low-level stream playback with explicit configuration |
+| `Mixer`, `MixerSource`, `mixer()` | Mix multiple sources with per-source volume/pan |
+| `AudioSourceQueue`, `queue()`, `SourcesQueueInput/Output` | Sequential playback queues |
+| `AudioDecoder`, `DecoderBuilder`, `LoopedDecoder` | Decode files/buffers to raw samples, looping support |
+| `SamplesBuffer`, `StaticSamplesBuffer` | In-memory PCM buffers |
+| Noise generators | `WhiteUniformNoise`, `WhiteGaussianNoise`, `PinkNoise`, `BlueNoise`, `VioletNoise`, `BrownianNoise`, `VelvetNoise`, … |
+| Converters | `SampleRateConverter`, `ChannelCountConverter`, `SampleTypeConverter` |
+| Utilities | `dbToLinear()`, `linearToDb()`, `testTone()`, `setDebug()`/`isDebugEnabled()`, `getAvailableHosts()`, `getInputDevices()` |
 
 ## 🎯 Supported Audio Formats
 
@@ -336,12 +357,12 @@ bun test
 
 | Script | Description |
 |--------|-------------|
-| `bun build` | Build native Rust module |
+| `bun run build` | Build native Rust module (release) |
+| `bun run build:debug` | Build native Rust module (debug) |
+| `bun run build:watch` | Rebuild automatically on changes |
 | `bun test` | Run all tests |
-| `bun clean` | Clean build artifacts |
-| `bun dev` | Build and test |
-| `bun lint` | Run ESLint |
-| `bun format` | Format code with Prettier |
+| `bun run clean` | Clean build artifacts |
+| `bun run copy:artifacts` | Copy built artifacts to expected locations |
 
 ## 🧪 Testing
 
@@ -374,7 +395,7 @@ The test suite includes:
 
 ### Current Test Status ✅
 
-- **All 58 tests passing** 🎉
+- **All 53 tests passing** 🎉
 - **0 test failures** ✨
 - **Complete coverage** of core API functionality
 - **Cross-platform compatibility** verified
@@ -449,7 +470,7 @@ try {
   player.loadFile('audio.mp3')
   player.play()
 } catch (error) {
-  if (error.message.includes('does not exist')) {
+  if (error.message.includes('File not found')) {
     console.error('Audio file not found:', error.message)
   } else if (error.message.includes('Volume must be between 0.0 and 1.0')) {
     console.error('Invalid volume value:', error.message)
