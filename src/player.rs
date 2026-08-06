@@ -616,29 +616,14 @@ impl AudioPlayer {
             let volume = *self.volume.lock().unwrap_or_else(|e| e.into_inner());
             sink.set_volume(volume);
 
-            if let Some(ref file_path) = self.current_file {
-                let path = Path::new(file_path);
-                let file = File::open(path).map_err(|e| {
-                    Error::new(
-                        Status::GenericFailure,
-                        format!("Failed to reopen file: {}", e),
-                    )
-                })?;
-
-                let reader = BufReader::new(file);
-                let decoder = Decoder::new(reader).map_err(|e| {
-                    Error::new(
-                        Status::GenericFailure,
-                        format!("Failed to create decoder: {}", e),
-                    )
-                })?;
-
-                // Skip to the desired position
-                let skip_duration = std::time::Duration::from_secs_f64(position);
-                let source = decoder.skip_duration(skip_duration);
-                sink.append(source);
-                debug_log!("File source appended with skip to position: {}s", position);
-            } else if let Some(samples) = self.audio_samples.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+            // Check decoded buffer samples first: buffer-loaded players carry
+            // a synthetic "__BUFFER__..." current_file that cannot be opened.
+            if let Some(samples) = self
+                .audio_samples
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+            {
                 // Buffer content is stored as decoded PCM, so seeking is a
                 // simple sample-offset skip using the real format of the
                 // loaded content (TTS audio is commonly mono and not
@@ -666,6 +651,28 @@ impl AudioPlayer {
                     "Buffer source appended with skip to position: {}s",
                     position
                 );
+            } else if let Some(ref file_path) = self.current_file {
+                let path = Path::new(file_path);
+                let file = File::open(path).map_err(|e| {
+                    Error::new(
+                        Status::GenericFailure,
+                        format!("Failed to reopen file: {}", e),
+                    )
+                })?;
+
+                let reader = BufReader::new(file);
+                let decoder = Decoder::new(reader).map_err(|e| {
+                    Error::new(
+                        Status::GenericFailure,
+                        format!("Failed to create decoder: {}", e),
+                    )
+                })?;
+
+                // Skip to the desired position
+                let skip_duration = std::time::Duration::from_secs_f64(position);
+                let source = decoder.skip_duration(skip_duration);
+                sink.append(source);
+                debug_log!("File source appended with skip to position: {}s", position);
             }
 
             sink.play();
