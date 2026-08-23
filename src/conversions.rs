@@ -141,11 +141,24 @@ pub struct ChannelCountConverter {
 #[napi]
 impl ChannelCountConverter {
     #[napi(constructor)]
-    pub fn new(source_channels: u16, target_channels: u16) -> Self {
-        Self {
+    pub fn new(source_channels: u16, target_channels: u16) -> Result<Self> {
+        if source_channels == 0 {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Source channel count must be greater than zero",
+            ));
+        }
+        if target_channels == 0 {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Target channel count must be greater than zero",
+            ));
+        }
+
+        Ok(Self {
             source_channels,
             target_channels,
-        }
+        })
     }
 
     /// Convert audio samples from source channel count to target channel count
@@ -217,12 +230,32 @@ pub struct SampleRateConverter {
 #[napi]
 impl SampleRateConverter {
     #[napi(constructor)]
-    pub fn new(source_rate: u32, target_rate: u32, channels: Option<u16>) -> Self {
-        Self {
+    pub fn new(source_rate: u32, target_rate: u32, channels: Option<u16>) -> Result<Self> {
+        if source_rate == 0 {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Source sample rate must be greater than zero",
+            ));
+        }
+        if target_rate == 0 {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Target sample rate must be greater than zero",
+            ));
+        }
+        let channels = channels.unwrap_or(1);
+        if channels == 0 {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Channel count must be greater than zero",
+            ));
+        }
+
+        Ok(Self {
             source_rate,
             target_rate,
-            channels: channels.unwrap_or(1),
-        }
+            channels,
+        })
     }
 
     /// Convert audio samples from source rate to target rate using linear interpolation

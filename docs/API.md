@@ -64,7 +64,7 @@ const recentSamples = recorder.getRingBufferSamples();
 recorder.stop();
 ```
 
-`setRingBufferSize()` bounds the retained history in samples. `getRingBufferSamples()` returns a non-destructive snapshot, so repeated reads do not consume the retained samples. `getBuffer()` returns the retained samples as a `SamplesBuffer`; `clear()` empties both retained stores and resets peak/RMS levels. `setOnData()` receives incoming sample chunks, and `getLevels()` reports peak and RMS levels.
+`setRingBufferSize()` bounds the retained history in samples; when it overflows, the history keeps the newest samples. `getRingBufferSamples()` returns a non-destructive snapshot, so repeated reads do not consume the retained samples. `getBuffer()` returns the same bounded time window as a `SamplesBuffer`; `clear()` empties both retained stores and resets peak/RMS levels. `setOnData()` receives incoming sample chunks, and `getLevels()` reports peak and RMS levels.
 
 Pass a device ID returned by `getInputDevices()` to `start(deviceId)`. Malformed or unknown IDs are rejected; they never fall back to the first input device.
 
@@ -149,7 +149,7 @@ All converter inputs use interleaved samples. A stereo frame is `[left, right]`;
 | `ChannelCountConverter` | Convert mono, stereo, and arbitrary channel layouts frame by frame. |
 | `SampleTypeConverter` | Convert between supported 8-, 16-, 24-, and 32-bit sample representations; unsupported bit depths are rejected. |
 
-For multichannel data, construct `SampleRateConverter(sourceRate, targetRate, channels)` so interpolation never crosses channel boundaries.
+`SampleRateConverter` rejects zero source/target rates or channel counts, and `ChannelCountConverter` rejects zero source/target channel counts. For multichannel data, construct `SampleRateConverter(sourceRate, targetRate, channels)` so interpolation never crosses channel boundaries.
 
 ## Mixing
 

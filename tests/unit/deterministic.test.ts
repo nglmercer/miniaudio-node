@@ -143,9 +143,24 @@ describe("deterministic native validation", () => {
   });
 
   it("covers deterministic queues, converters, and stream-builder validation", () => {
+    expect(() => new ChannelCountConverter(0, 2)).toThrow(
+      /Source channel count must be greater than zero/,
+    );
+    expect(() => new ChannelCountConverter(2, 0)).toThrow(
+      /Target channel count must be greater than zero/,
+    );
     const channels = new ChannelCountConverter(1, 2);
     expect(channels.convert([100, 200])).toEqual([100, 100, 200, 200]);
 
+    expect(() => new SampleRateConverter(0, 44_100)).toThrow(
+      /Source sample rate must be greater than zero/,
+    );
+    expect(() => new SampleRateConverter(44_100, 0)).toThrow(
+      /Target sample rate must be greater than zero/,
+    );
+    expect(() => new SampleRateConverter(44_100, 48_000, 0)).toThrow(
+      /Channel count must be greater than zero/,
+    );
     const rates = new SampleRateConverter(48_000, 44_100, 2);
     expect(
       rates.convert([0, 10_000, 1_000, 11_000, 2_000, 12_000, 3_000, 13_000]).length,

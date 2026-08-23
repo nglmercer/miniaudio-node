@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn test_channel_conversion() {
-        let converter = conversions::ChannelCountConverter::new(1, 2);
+        let converter = conversions::ChannelCountConverter::new(1, 2).unwrap();
         assert_eq!(converter.source_channels(), 1);
         assert_eq!(converter.target_channels(), 2);
 
@@ -97,25 +97,25 @@ mod tests {
 
     #[test]
     fn test_channel_conversion_handles_general_layouts() {
-        let stereo_to_three = conversions::ChannelCountConverter::new(2, 3);
+        let stereo_to_three = conversions::ChannelCountConverter::new(2, 3).unwrap();
         assert_eq!(
             stereo_to_three.convert(vec![1000, 2000, 3000, 4000]),
             vec![1000, 2000, 1500, 3000, 4000, 3500]
         );
 
-        let three_to_two = conversions::ChannelCountConverter::new(3, 2);
+        let three_to_two = conversions::ChannelCountConverter::new(3, 2).unwrap();
         assert_eq!(
             three_to_two.convert(vec![1000, 2000, 3000]),
             vec![2000, 2000]
         );
 
-        let zero_channels = conversions::ChannelCountConverter::new(0, 2);
-        assert!(zero_channels.convert(vec![1, 2, 3]).is_empty());
+        assert!(conversions::ChannelCountConverter::new(0, 2).is_err());
+        assert!(conversions::ChannelCountConverter::new(2, 0).is_err());
     }
 
     #[test]
     fn test_sample_rate_conversion() {
-        let converter = conversions::SampleRateConverter::new(44100, 48000, None);
+        let converter = conversions::SampleRateConverter::new(44100, 48000, None).unwrap();
         assert_eq!(converter.source_rate(), 44100);
         assert_eq!(converter.target_rate(), 48000);
 
@@ -126,7 +126,7 @@ mod tests {
 
     #[test]
     fn test_sample_rate_conversion_preserves_interleaved_channels() {
-        let converter = conversions::SampleRateConverter::new(48000, 44100, Some(2));
+        let converter = conversions::SampleRateConverter::new(48000, 44100, Some(2)).unwrap();
         let samples = vec![0, 10000, 1000, 11000, 2000, 12000, 3000, 13000];
         let converted = converter.convert(samples);
 
@@ -136,6 +136,10 @@ mod tests {
             .0
             .iter()
             .all(|frame| frame[1] - frame[0] >= 9_000));
+
+        assert!(conversions::SampleRateConverter::new(0, 48000, None).is_err());
+        assert!(conversions::SampleRateConverter::new(44100, 0, None).is_err());
+        assert!(conversions::SampleRateConverter::new(44100, 48000, Some(0)).is_err());
     }
 
     #[test]
@@ -167,16 +171,6 @@ mod tests {
         let third = q.add_buffer(vec![3], None).unwrap();
         assert_eq!(third, "source_2");
         assert_eq!(output.get_remaining(), 1);
-    }
-
-    #[test]
-    fn test_recorder_retention_overwrites_oldest_samples() {
-        let mut samples = vec![1, 2, 3, 4];
-        input::append_bounded(&mut samples, &[5, 6], Some(4));
-        assert_eq!(samples, vec![3, 4, 5, 6]);
-
-        input::append_bounded(&mut samples, &[7, 8, 9, 10, 11], Some(4));
-        assert_eq!(samples, vec![8, 9, 10, 11]);
     }
 
     #[test]
