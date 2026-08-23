@@ -26,7 +26,6 @@ pub struct AudioDeviceInfo {
 }
 
 /// Audio player state enumeration
-/// Audio player state enumeration
 #[napi(string_enum)]
 #[derive(Debug, PartialEq, Clone)]
 pub enum PlaybackState {

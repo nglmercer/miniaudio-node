@@ -5,7 +5,7 @@
  * using Bun's built-in test runner and cross-platform audio files.
  */
 
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it as bunIt, expect, beforeEach } from "bun:test";
 const {
   AudioPlayer,
   initializeAudio,
@@ -26,10 +26,10 @@ import {
   getValidTestFilePath,
   safeInitializeAudio,
   isAudioSystemAvailable,
-  skipIfNoAudio,
   TEST_CONFIG,
   validateAudioFile,
 } from "../utils/test-helpers.js";
+const it = bunIt.skipIf(!isAudioSystemAvailable());
 setDebug(false);
 describe("Core Audio API Integration Tests", () => {
   beforeEach(async () => {

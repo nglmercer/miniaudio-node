@@ -1,7 +1,7 @@
 //! Audio streaming module for real-time playback
 
 use crate::buffer::SamplesBuffer;
-use crate::types::{PlayError, SupportedStreamConfig};
+use crate::types::{PlaybackState, SupportedStreamConfig};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
 use rodio::{OutputStream, OutputStreamBuilder, Sink, Source as RodioSource};
@@ -19,6 +19,9 @@ pub struct AudioStream {
     is_playing: Arc<Mutex<bool>>,
     is_paused: Arc<Mutex<bool>>,
     volume: Arc<Mutex<f32>>,
+    requested_sample_rate: Option<u32>,
+    requested_channels: Option<u16>,
+    requested_buffer_size: Option<u32>,
 }
 
 impl Default for AudioStream {
@@ -31,19 +34,65 @@ impl Default for AudioStream {
 impl AudioStream {
     #[napi(constructor)]
     pub fn new() -> Self {
+        Self::with_config(None, None, None)
+    }
+
+    fn with_config(
+        requested_sample_rate: Option<u32>,
+        requested_channels: Option<u16>,
+        requested_buffer_size: Option<u32>,
+    ) -> Self {
         Self {
             sink: Arc::new(Mutex::new(None)),
             output_stream: Arc::new(Mutex::new(None)),
             is_playing: Arc::new(Mutex::new(false)),
             is_paused: Arc::new(Mutex::new(false)),
             volume: Arc::new(Mutex::new(1.0)),
+            requested_sample_rate,
+            requested_channels,
+            requested_buffer_size,
         }
     }
 
     /// Open and initialize the audio stream
     #[napi]
     pub fn open(&mut self) -> Result<()> {
-        let stream = OutputStreamBuilder::open_default_stream().map_err(|e| {
+        let mut builder = OutputStreamBuilder::from_default_device().map_err(|e| {
+            Error::new(
+                Status::InvalidArg,
+                format!("Failed to create output stream: {}", e),
+            )
+        })?;
+
+        if let Some(sample_rate) = self.requested_sample_rate {
+            if sample_rate == 0 {
+                return Err(Error::new(
+                    Status::InvalidArg,
+                    "Sample rate must be greater than zero",
+                ));
+            }
+            builder = builder.with_sample_rate(sample_rate);
+        }
+        if let Some(channels) = self.requested_channels {
+            if channels == 0 {
+                return Err(Error::new(
+                    Status::InvalidArg,
+                    "Channel count must be greater than zero",
+                ));
+            }
+            builder = builder.with_channels(channels);
+        }
+        if let Some(buffer_size) = self.requested_buffer_size {
+            if buffer_size == 0 {
+                return Err(Error::new(
+                    Status::InvalidArg,
+                    "Buffer size must be greater than zero",
+                ));
+            }
+            builder = builder.with_buffer_size(rodio::cpal::BufferSize::Fixed(buffer_size));
+        }
+
+        let stream = builder.open_stream().map_err(|e| {
             Error::new(
                 Status::InvalidArg,
                 format!("Failed to create output stream: {}", e),
@@ -52,6 +101,7 @@ impl AudioStream {
 
         let mixer = stream.mixer();
         let sink = Sink::connect_new(mixer);
+        sink.set_volume(*self.volume.lock().unwrap_or_else(|e| e.into_inner()));
 
         *self.output_stream.lock().unwrap_or_else(|e| e.into_inner()) = Some(stream);
         *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(sink);
@@ -117,23 +167,36 @@ impl AudioStream {
 
     /// Get the current playback state
     #[napi]
-    pub fn get_state(&self) -> PlayError {
-        let is_playing = *self.is_playing.lock().unwrap_or_else(|e| e.into_inner());
+    pub fn get_state(&self) -> PlaybackState {
         let is_paused = *self.is_paused.lock().unwrap_or_else(|e| e.into_inner());
 
         if is_paused {
-            PlayError::AlreadyPlaying
-        } else if is_playing {
-            PlayError::NotLoaded
+            PlaybackState::Paused
         } else {
-            PlayError::SystemError
+            let is_playing = *self.is_playing.lock().unwrap_or_else(|e| e.into_inner());
+            if !is_playing {
+                return PlaybackState::Stopped;
+            }
+
+            let finished = self
+                .sink
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .is_some_and(|sink| sink.empty());
+            if finished {
+                *self.is_playing.lock().unwrap_or_else(|e| e.into_inner()) = false;
+                PlaybackState::Stopped
+            } else {
+                PlaybackState::Playing
+            }
         }
     }
 
     /// Check if audio is currently playing
     #[napi]
     pub fn is_playing(&self) -> bool {
-        *self.is_playing.lock().unwrap_or_else(|e| e.into_inner())
+        self.get_state() == PlaybackState::Playing
     }
 
     /// Pause the stream
@@ -167,9 +230,11 @@ impl AudioStream {
     /// Stop the stream
     #[napi]
     pub fn stop(&mut self) -> Result<()> {
-        let sink_guard = self.sink.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(sink) = sink_guard.as_ref() {
-            sink.stop();
+        {
+            let sink_guard = self.sink.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(sink) = sink_guard.as_ref() {
+                sink.stop();
+            }
         }
         *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.is_playing.lock().unwrap_or_else(|e| e.into_inner()) = false;
@@ -285,9 +350,18 @@ impl AudioStreamBuilder {
 
     #[napi]
     pub fn build(&self) -> Result<AudioStream> {
-        // For now, just return a basic stream
-        // In a full implementation, this would configure the stream with the given parameters
-        Ok(AudioStream::new())
+        if self.sample_rate == Some(0) || self.channels == Some(0) || self.buffer_size == Some(0) {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Sample rate, channels, and buffer size must be greater than zero",
+            ));
+        }
+
+        Ok(AudioStream::with_config(
+            self.sample_rate,
+            self.channels,
+            self.buffer_size,
+        ))
     }
 }
 

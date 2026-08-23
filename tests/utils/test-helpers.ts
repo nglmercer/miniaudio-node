@@ -104,17 +104,6 @@ export function isAudioSystemAvailable(): boolean {
 }
 
 /**
- * Skip test if audio system is not available
- */
-export function skipIfNoAudio(): void {
-  if (!isAudioSystemAvailable()) {
-    console.warn('Skipping test: Audio system not available')
-    // In a real test framework, this would skip the test
-    // For Bun, we'll just log and continue
-  }
-}
-
-/**
  * Get platform-specific timeout for audio operations
  */
 export function getAudioTestTimeout(): number {

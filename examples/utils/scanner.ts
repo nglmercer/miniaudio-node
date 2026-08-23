@@ -21,7 +21,7 @@ export async function scanExternalFolder(externalPath: string): Promise<Song[]> 
         : resolve("/", externalPath);
 
     // 2. Instantiate Glob with the audio extensions
-    const glob = new Glob("**/*.{mp3,flac,m4a,wav,ogg,opus,aac}");
+    const glob = new Glob("**/*.{mp3,flac,m4a,wav,ogg,aac}");
     const songs: Song[] = [];
 
     try {

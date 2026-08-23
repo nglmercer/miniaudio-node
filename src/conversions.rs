@@ -2,6 +2,113 @@
 
 use napi_derive::napi;
 
+/// Convert interleaved samples between channel layouts.
+///
+/// Existing channels are preserved where possible. When reducing the channel
+/// count, source channels are grouped into the target channels and averaged;
+/// when expanding it, additional channels receive the average of the source
+/// frame. This keeps every output frame at exactly `target_channels` samples.
+pub(crate) fn convert_channels_f32(
+    samples: &[f32],
+    source_channels: u16,
+    target_channels: u16,
+) -> Vec<f32> {
+    let src = source_channels as usize;
+    let dst = target_channels as usize;
+    if src == 0 || dst == 0 {
+        return Vec::new();
+    }
+
+    let frame_count = samples.len() / src;
+    let samples = &samples[..frame_count * src];
+    if src == dst {
+        return samples.to_vec();
+    }
+
+    let mut output = Vec::with_capacity(frame_count * dst);
+    for frame in samples.chunks_exact(src) {
+        let source_average = frame.iter().copied().sum::<f32>() / src as f32;
+
+        if dst == 1 {
+            output.push(source_average);
+            continue;
+        }
+
+        if src == 1 {
+            output.extend(std::iter::repeat_n(frame[0], dst));
+            continue;
+        }
+
+        if dst < src {
+            for target_index in 0..dst {
+                let mut sum = 0.0;
+                let mut count = 0;
+                for source_index in (target_index..src).step_by(dst) {
+                    sum += frame[source_index];
+                    count += 1;
+                }
+                output.push(if count == 0 {
+                    source_average
+                } else {
+                    sum / count as f32
+                });
+            }
+        } else {
+            output.extend_from_slice(frame);
+            output.extend(std::iter::repeat_n(source_average, dst - src));
+        }
+    }
+
+    output
+}
+
+/// Resample interleaved samples using a fractional source position for every
+/// destination frame. Interpolation is performed independently per channel.
+pub(crate) fn resample_f32(
+    samples: &[f32],
+    source_rate: u32,
+    target_rate: u32,
+    channels: u16,
+) -> Vec<f32> {
+    let channel_count = channels as usize;
+    if source_rate == 0 || target_rate == 0 || channel_count == 0 {
+        return Vec::new();
+    }
+
+    let source_frames = samples.len() / channel_count;
+    let samples = &samples[..source_frames * channel_count];
+    if source_frames == 0 {
+        return Vec::new();
+    }
+    if source_rate == target_rate {
+        return samples.to_vec();
+    }
+
+    let ratio = target_rate as f64 / source_rate as f64;
+    let target_frames = (source_frames as f64 * ratio).floor() as usize;
+    let source_step = source_rate as f64 / target_rate as f64;
+    let mut output = Vec::with_capacity(target_frames * channel_count);
+
+    for target_frame in 0..target_frames {
+        let source_position = target_frame as f64 * source_step;
+        let source_index = source_position.floor() as usize;
+        let fraction = (source_position - source_index as f64) as f32;
+        let next_index = (source_index + 1).min(source_frames - 1);
+
+        for channel in 0..channel_count {
+            let first = samples[source_index * channel_count + channel];
+            let second = samples[next_index * channel_count + channel];
+            output.push(first + (second - first) * fraction);
+        }
+    }
+
+    output
+}
+
+fn clamp_i16(value: f32) -> i16 {
+    value.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
+}
+
 /// Parameters for channel count conversion
 #[napi(object)]
 pub struct ChannelCountConversion {
@@ -46,44 +153,41 @@ impl ChannelCountConverter {
         let src = self.source_channels as usize;
         let dst = self.target_channels as usize;
 
-        if src == dst {
-            return samples;
+        if src == 0 || dst == 0 {
+            return Vec::new();
         }
 
-        let output_len = (samples.len() / src) * dst;
-        let mut output = Vec::with_capacity(output_len);
+        let frame_count = samples.len() / src;
+        let samples = &samples[..frame_count * src];
+        if src == dst {
+            return samples.to_vec();
+        }
 
-        if src == 1 && dst == 2 {
-            // Mono to stereo (duplicate samples)
-            for sample in samples {
-                output.push(sample);
-                output.push(sample);
-            }
-        } else if src == 2 && dst == 1 {
-            // Stereo to mono (average channels)
-            for chunk in samples.chunks(2) {
-                if chunk.len() == 2 {
-                    let avg = ((chunk[0] as i32 + chunk[1] as i32) / 2) as i16;
-                    output.push(avg);
-                }
-            }
-        } else {
-            // For other conversions, upsample by duplicating or downsample by averaging
-            if dst > src {
-                // Upsample: duplicate samples
-                for sample in samples {
-                    for _ in 0..dst {
-                        output.push(sample / src as i16);
+        let mut output = Vec::with_capacity(frame_count * dst);
+        for frame in samples.chunks_exact(src) {
+            let sum: i64 = frame.iter().map(|&sample| sample as i64).sum();
+            let source_average = (sum / src as i64).clamp(i16::MIN as i64, i16::MAX as i64) as i16;
+
+            if dst == 1 {
+                output.push(source_average);
+            } else if src == 1 {
+                output.extend(std::iter::repeat_n(frame[0], dst));
+            } else if dst < src {
+                for target_index in 0..dst {
+                    let mut group_sum = 0i64;
+                    let mut group_count = 0i64;
+                    for source_index in (target_index..src).step_by(dst) {
+                        group_sum += frame[source_index] as i64;
+                        group_count += 1;
                     }
+                    output.push(
+                        (group_sum / group_count.max(1)).clamp(i16::MIN as i64, i16::MAX as i64)
+                            as i16,
+                    );
                 }
             } else {
-                // Downsample: average samples in groups
-                for chunk in samples.chunks(src) {
-                    if chunk.len() == src {
-                        let sum: i32 = chunk.iter().map(|&s| s as i32).sum();
-                        output.push((sum / dst as i32) as i16);
-                    }
-                }
+                output.extend_from_slice(frame);
+                output.extend(std::iter::repeat_n(source_average, dst - src));
             }
         }
 
@@ -106,57 +210,35 @@ impl ChannelCountConverter {
 pub struct SampleRateConverter {
     source_rate: u32,
     target_rate: u32,
+    channels: u16,
 }
 
 #[napi]
 impl SampleRateConverter {
     #[napi(constructor)]
-    pub fn new(source_rate: u32, target_rate: u32) -> Self {
+    pub fn new(source_rate: u32, target_rate: u32, channels: Option<u16>) -> Self {
         Self {
             source_rate,
             target_rate,
+            channels: channels.unwrap_or(1),
         }
     }
 
     /// Convert audio samples from source rate to target rate using linear interpolation
     #[napi]
     pub fn convert(&self, samples: Vec<i16>) -> Vec<i16> {
-        if self.source_rate == self.target_rate {
-            return samples;
-        }
-
-        let ratio = self.target_rate as f64 / self.source_rate as f64;
-        let output_len = (samples.len() as f64 * ratio) as usize;
-        let mut output = Vec::with_capacity(output_len);
-
-        if ratio > 1.0 {
-            // Upsample - use linear interpolation
-            for i in 0..output_len {
-                let pos = i as f64 / ratio;
-                let idx = pos as usize;
-                let frac = pos - idx as f64;
-
-                if idx + 1 < samples.len() {
-                    let s1 = samples[idx] as f64;
-                    let s2 = samples[idx + 1] as f64;
-                    let interpolated = s1 + (s2 - s1) * frac;
-                    output.push(interpolated as i16);
-                } else if idx < samples.len() {
-                    output.push(samples[idx]);
-                }
-            }
-        } else {
-            // Downsample - take every nth sample
-            let stride = (1.0 / ratio) as usize;
-            for i in 0..output_len {
-                let idx = i * stride;
-                if idx < samples.len() {
-                    output.push(samples[idx]);
-                }
-            }
-        }
-
-        output
+        resample_f32(
+            &samples
+                .iter()
+                .map(|&sample| sample as f32)
+                .collect::<Vec<_>>(),
+            self.source_rate,
+            self.target_rate,
+            self.channels,
+        )
+        .into_iter()
+        .map(clamp_i16)
+        .collect()
     }
 
     #[napi]
@@ -167,6 +249,11 @@ impl SampleRateConverter {
     #[napi]
     pub fn target_rate(&self) -> u32 {
         self.target_rate
+    }
+
+    #[napi]
+    pub fn channels(&self) -> u16 {
+        self.channels
     }
 }
 

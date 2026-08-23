@@ -72,7 +72,7 @@ impl SamplesBuffer {
         Self::new(channels as u16, sample_rate, samples)
     }
 
-    /// Play this buffer with the given sink
+    /// Play this buffer asynchronously; returns after the output stream starts.
     #[napi]
     pub fn play(&self) -> napi::Result<()> {
         use rodio::{OutputStreamBuilder, Sink, Source};
@@ -146,8 +146,12 @@ impl SamplesBuffer {
         sink.append(source);
         sink.play();
 
-        // Block until playback finishes to keep stream alive
-        sink.sleep_until_end();
+        // Keep the stream and sink alive on a detached worker so a long buffer
+        // does not block the JavaScript/Bun thread for its full duration.
+        std::thread::spawn(move || {
+            sink.sleep_until_end();
+            drop(stream);
+        });
 
         Ok(())
     }

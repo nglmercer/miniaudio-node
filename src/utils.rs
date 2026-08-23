@@ -6,7 +6,6 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 use std::sync::atomic::Ordering;
-use std::thread;
 use std::time::Duration;
 
 #[napi]
@@ -41,7 +40,6 @@ pub fn get_supported_formats() -> Vec<String> {
         "ogg".to_string(),
         "aac".to_string(),
         "m4a".to_string(),
-        "opus".to_string(),
     ]
 }
 
@@ -55,6 +53,7 @@ pub fn get_audio_info() -> Result<String> {
     Ok("Audio system: rodio\nDefault device: Default Output Device\nChannels: Stereo\nSample rate: 44100".to_string())
 }
 
+/// Start a sine-wave test tone without blocking the JavaScript thread.
 #[napi]
 pub fn test_tone(frequency: f64, duration_ms: u32) -> Result<()> {
     use rodio::source::SineWave;
@@ -74,7 +73,13 @@ pub fn test_tone(frequency: f64, duration_ms: u32) -> Result<()> {
         .amplify(0.3);
 
     sink.append(source);
-    thread::sleep(Duration::from_millis(duration_ms as u64));
+
+    // Keep playback alive without blocking the N-API call for the requested
+    // duration. Errors opening the stream are still reported synchronously.
+    std::thread::spawn(move || {
+        sink.sleep_until_end();
+        drop(stream);
+    });
 
     Ok(())
 }

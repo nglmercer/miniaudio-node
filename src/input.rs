@@ -15,6 +15,32 @@ const DEVICE_ID_SEPARATOR: char = ':';
 const I16_MAX_F32: f32 = 32768.0;
 const PREFERRED_LINUX_BUFFER_SIZE: u32 = 1024;
 
+pub(crate) fn append_bounded(target: &mut Vec<i16>, data: &[i16], capacity: Option<usize>) {
+    let Some(capacity) = capacity else {
+        target.extend_from_slice(data);
+        return;
+    };
+    if capacity == 0 {
+        target.clear();
+        return;
+    }
+
+    if data.len() >= capacity {
+        target.clear();
+        target.extend_from_slice(&data[data.len() - capacity..]);
+        return;
+    }
+
+    let required_drop = target
+        .len()
+        .saturating_add(data.len())
+        .saturating_sub(capacity);
+    if required_drop > 0 {
+        target.drain(..required_drop.min(target.len()));
+    }
+    target.extend_from_slice(data);
+}
+
 #[napi(object)]
 pub struct AudioHostInfo {
     pub id: String,
@@ -154,8 +180,12 @@ pub fn get_input_devices() -> Result<Vec<AudioDeviceInfo>> {
 #[napi]
 pub struct AudioRecorder {
     stream: Option<cpal::Stream>,
-    recorded_samples: Arc<Mutex<Vec<i16>>>, // Full history
-    ring_buffer: Arc<Mutex<Option<ringbuf::HeapRb<i16>>>>, // Ring buffer for continuous recording
+    // Full history when no retention limit is requested. Once a ring-buffer
+    // size is configured this vector keeps the same bounded latest-samples
+    // window instead of growing for the lifetime of the recorder.
+    recorded_samples: Arc<Mutex<Vec<i16>>>,
+    ring_buffer: Arc<Mutex<Option<ringbuf::HeapRb<i16>>>>,
+    recorded_capacity: Arc<Mutex<Option<usize>>>,
     on_data_callback: Arc<Mutex<Option<OnDataCallback>>>,
     is_recording: Arc<AtomicBool>,
     sample_rate: u32,
@@ -184,6 +214,7 @@ impl AudioRecorder {
             stream: None,
             recorded_samples: Arc::new(Mutex::new(Vec::new())),
             ring_buffer: Arc::new(Mutex::new(None)),
+            recorded_capacity: Arc::new(Mutex::new(None)),
             on_data_callback: Arc::new(Mutex::new(None)),
             is_recording: Arc::new(AtomicBool::new(false)),
             sample_rate: DEFAULT_SAMPLE_RATE,
@@ -210,10 +241,30 @@ impl AudioRecorder {
     }
 
     #[napi]
-    pub fn set_ring_buffer_size(&self, size_samples: u32) {
+    pub fn set_ring_buffer_size(&self, size_samples: u32) -> Result<()> {
+        if size_samples == 0 {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Ring buffer size must be greater than zero",
+            ));
+        }
         use ringbuf::HeapRb;
         let rb = HeapRb::<i16>::new(size_samples as usize);
         *self.ring_buffer.lock().unwrap_or_else(|e| e.into_inner()) = Some(rb);
+        *self
+            .recorded_capacity
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(size_samples as usize);
+        let capacity = size_samples as usize;
+        let mut recorded = self
+            .recorded_samples
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if recorded.len() > capacity {
+            let first = recorded.len() - capacity;
+            recorded.drain(..first);
+        }
+        Ok(())
     }
 
     #[napi]
@@ -289,6 +340,7 @@ impl AudioRecorder {
 
         let recorded_samples = self.recorded_samples.clone();
         let ring_buffer = self.ring_buffer.clone();
+        let recorded_capacity = self.recorded_capacity.clone();
         let on_data = self.on_data_callback.clone();
         let is_recording = self.is_recording.clone();
         let last_peak = self.last_peak.clone();
@@ -298,8 +350,12 @@ impl AudioRecorder {
         {
             let mut samples = recorded_samples.lock().unwrap_or_else(|e| e.into_inner());
             samples.clear();
-            let reserve_size =
-                (self.sample_rate * self.channels as u32 * DEFAULT_RESERVE_SECONDS) as usize;
+            let reserve_size = recorded_capacity
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .unwrap_or(
+                    (self.sample_rate * self.channels as u32 * DEFAULT_RESERVE_SECONDS) as usize,
+                );
             samples.reserve(reserve_size);
         }
 
@@ -344,15 +400,16 @@ impl AudioRecorder {
                 // Fill full history
                 {
                     let mut samples = recorded_samples.lock().unwrap_or_else(|e| e.into_inner());
-                    samples.extend_from_slice(data);
+                    let capacity = *recorded_capacity.lock().unwrap_or_else(|e| e.into_inner());
+                    append_bounded(&mut samples, data, capacity);
                 }
 
                 // Fill ring buffer
                 {
                     let mut rb_guard = ring_buffer.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(rb) = rb_guard.as_mut() {
-                        use ringbuf::traits::Producer;
-                        let _ = rb.push_slice(data);
+                        use ringbuf::traits::RingBuffer;
+                        rb.push_slice_overwrite(data);
                     }
                 }
 

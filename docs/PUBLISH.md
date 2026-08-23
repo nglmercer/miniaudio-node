@@ -1,209 +1,119 @@
-# 🚀 Guía de Publicación Multiplataforma
+# Publishing releases
 
-## 📋 Estrategia Recomendada: GitHub Actions
+MiniAudio Node uses GitHub Actions to build and publish the native package. The maintained workflow is [`.github/workflows/release.yml`](../.github/workflows/release.yml).
 
-**Usa GitHub Actions para compilación multiplataforma automática** - este es el mejor enfoque para módulos nativos.
+## Release sequence
 
-### 1. Configurar GitHub Actions
+The workflow has three gates:
 
-Crear `.github/workflows/release.yml`:
+1. **Quality** — Rust formatting, Clippy, Rust tests, and TypeScript checks run on Ubuntu.
+2. **Build** — the six published native targets are built in parallel.
+3. **Publish** — artifacts are collected into a package directory, a GitHub release is created, and npm publication is attempted.
 
-```yaml
-name: Release
+The build matrix is:
 
-on:
-  push:
-    tags:
-      - 'v*'
+| Target | Runner | Native tests |
+| --- | --- | --- |
+| `x86_64-pc-windows-msvc` | Windows | Yes |
+| `i686-pc-windows-msvc` | Windows | Build only |
+| `x86_64-apple-darwin` | macOS Intel | Yes |
+| `aarch64-apple-darwin` | macOS Apple Silicon | Yes |
+| `x86_64-unknown-linux-gnu` | Ubuntu | Yes |
+| `aarch64-unknown-linux-gnu` | Ubuntu cross-build | Build only |
 
-jobs:
-  release:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        
-      - name: Build native module
-        run: |
-          cd native
-          cargo build --release
-          cargo test --release
-          
-      - name: Setup Bun (Linux/macOS)
-        if: runner.os != 'Windows'
-        run: |
-          curl -fsSL https://bun.sh/install | bash
-          echo "$HOME/.bun/bin" >> $GITHUB_PATH
-          
-      - name: Setup Bun (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          powershell -c "irm bun.sh/install.ps1 | iex"
-          echo "$HOME/.bun/bin" >> $GITHUB_PATH
-          
-      - name: Run tests
-        run: bun test
-        
-      - name: Publish to NPM
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish
-```
+The build-only entries are cross-compiled or otherwise cannot be executed by their runner. They still must compile and produce the expected artifact.
 
-### 2. Proceso de Lanzamiento
+## Create a tag release
+
+Keep the npm and Cargo versions aligned before creating a release. Then build and run the local checks:
 
 ```bash
-# 1. Actualizar versión
-npm version patch  # o minor/major
-
-# 2. Push tag
-git push --tags
-
-# 3. GitHub Actions hará:
-#    - Build para Windows, macOS, Linux
-#    - Ejecutar tests en cada plataforma
-#    - Publicar en npm automáticamente
-```
-
-### 3. Variables de Entorno
-
-Configurar en GitHub Secrets:
-- `NPM_TOKEN`: Token de publicación de npm
-
-## 🔄 Alternativa: Build Manual Multiplataforma
-
-Si prefieres builds manuales:
-
-```bash
-# 1. Build para cada plataforma manualmente
-# Windows (en Windows)
-cd native && cargo build --release --target x86_64-pc-windows-msvc
-
-# macOS (en macOS)  
-cd native && cargo build --release --target x86_64-apple-darwin
-
-# Linux (en Linux)
-cd native && cargo build --release --target x86_64-unknown-linux-gnu
-
-# 2. Publicar desde una plataforma
-npm publish
-```
-
-## 📁 Estructura Actual Simplificada
-
-```
-miniaudio_node/
-├── 🦀 native/                 # Módulo nativo Rust
-│   ├── src/
-│   │   └── lib.rs          # Implementación Rust FFI
-│   ├── Cargo.toml           # Dependencias Rust
-│   ├── index.js             # Entry point del módulo nativo
-│   ├── package.json          # Configuración del paquete nativo
-│   └── target/              # Artefactos de build
-│
-├── 🧪 tests/                 # Suite de tests
-│   ├── unit/                # Tests unitarios
-│   │   └── audio-player.test.ts
-│   └── integration/         # Tests de integración
-│       └── playback.test.ts
-│
-├── 📚 examples/               # Ejemplos de uso
-│   ├── usage.js             # Ejemplo básico JavaScript
-│   └── typescript/          # Ejemplos TypeScript
-│       └── advanced.ts       # Ejemplo avanzado
-│
-├── 📖 docs/                  # Documentación
-│   ├── CHANGELOG.md         # Historial de versiones
-│   ├── LICENSE              # Licencia
-│   └── PROJECT_STRUCTURE.md  # Estructura del proyecto
-│
-├── 📄 package.json            # Configuración del paquete
-├── 🚫 .gitignore             # Reglas de git ignore
-└── 📖 README.md               # Documentación principal
-```
-
-## 🛠️ Scripts Simplificados
-
-| Script | Descripción |
-|--------|-------------|
-| `bun build` | Build módulo nativo Rust |
-| `bun build:debug` | Build con símbolos de debug |
-| `bun test` | Ejecutar todos los tests |
-| `bun test:watch` | Tests en modo watch |
-| `bun clean` | Limpiar artefactos de build |
-| `bun dev` | Build y test |
-| `bun lint` | Ejecutar ESLint |
-| `bun format` | Formatear código con Prettier |
-
-## 🎯 Consideraciones Multiplataforma
-
-- **GitHub Actions** es recomendado para builds consistentes
-- **Dependencias nativas** son específicas de plataforma
-- **Testing** debe ejecutarse en todas las plataformas objetivo
-- **Gestión de versiones** debe usar versionado semántico
-- **Automatización de releases** previene errores humanos
-
-## 📦 Archivos Incluidos en npm
-
-```json
-"files": [
-  "native/",
-  "README.md",
-  "LICENSE",
-  "CHANGELOG.md"
-]
-```
-
-## 🔧 Configuración de Package.json
-
-```json
-{
-  "main": "./native/index.js",
-  "types": "./native/index.d.ts",
-  "exports": {
-    ".": {
-      "import": "./native/index.js",
-      "types": "./native/index.d.ts",
-      "default": "./native/index.js"
-    }
-  }
-}
-```
-
-## ✅ Verificación Final
-
-Antes de publicar:
-
-```bash
-# 1. Ejecutar tests
-bun test
-
-# 2. Verificar build
+bun install --frozen-lockfile
 bun run build
-
-# 3. Limpiar
-bun run clean
-
-# 4. Publicar
-npm publish
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets
+bun test
+bun run tsc --noEmit
 ```
 
-## 🎉 Resumen
+Create and push a semantic-version tag:
 
-La librería ahora está:
-- ✅ **Simplificada** - Solo lo necesario
-- ✅ **Testeada** - 38 tests pasando
-- ✅ **Documentada** - README y docs actualizados
-- ✅ **Lista para publicar** - Configuración multiplataforma lista
+```bash
+git tag v1.6.3
+git push origin v1.6.3
+```
 
-**Recomendación**: Usa GitHub Actions para publicación automática multiplataforma.
+A tag matching `v<major>.<minor>.<patch>` starts the release workflow. Pre-release suffixes such as `-beta.1` are also accepted by the workflow's tag validation.
+
+## Run a manual release
+
+The workflow supports `workflow_dispatch` with a required `version` input:
+
+```bash
+gh workflow run release.yml -f version=v1.6.3
+```
+
+The input must be a valid `v`-prefixed semantic version. The workflow derives one `TAG_NAME` value for both the GitHub release and npm package version, so a manual run from `main` does not accidentally publish a package named after the branch.
+
+## Required repository configuration
+
+The release job uses:
+
+- `GITHUB_TOKEN` to create the GitHub release;
+- `NPM_TOKEN` to publish to npm when npm publication is enabled.
+
+If `NPM_TOKEN` is absent, the workflow creates the GitHub release and emits a warning while skipping npm publication. Set the secret in the repository or organization settings before a release that must publish to npm.
+
+## Package contents
+
+The publish job copies these files into a temporary package directory:
+
+```text
+package/
+├── package.json
+├── index.js
+├── index.d.ts
+├── README.md
+├── LICENSE
+└── *.node
+```
+
+The native files are flattened into the package root with the platform-specific names expected by the generated N-API loader. Documentation articles remain in the repository and are linked from the README; they are not required in the runtime package.
+
+## Verify a package locally
+
+Before pushing a release tag, inspect the npm package file list:
+
+```bash
+npm pack --dry-run
+```
+
+Confirm that the package contains the loader, declarations, license, README, and the native artifact for the current host. A local build uses the N-API CLI directly; no custom loader patch is required after `bun run build`.
+
+## Release security
+
+The workflows pin third-party GitHub Actions to commit SHAs. The default workflow permissions are read-only, and write permissions are scoped to the publishing job. Keep those properties when changing release automation.
+
+Do not put npm tokens in source files, workflow arguments, or build logs. Rotate a token immediately if it is exposed.
+
+## Troubleshooting
+
+### A target is not found after the build
+
+Check the target name and artifact name in the matrix. The expected artifacts are listed in [Platform support](PLATFORM_SUPPORT.md). Build output must be copied into `dist/` before upload.
+
+### The package version is wrong
+
+Check the tag or manual `version` input. It must be `vX.Y.Z` (optionally with a pre-release suffix). The workflow strips the leading `v` only when writing `package.json`.
+
+### Native tests fail on a runner
+
+Confirm that the test is running against the artifact created by that matrix entry and that the runner has the required audio runtime. Hardware-dependent tests may be skipped when no audio system is available; deterministic failures must still fail the job. See [Testing](TESTING.md).
+
+## Related documentation
+
+- [Platform support](PLATFORM_SUPPORT.md)
+- [Development](DEVELOPMENT.md)
+- [Testing](TESTING.md)
+- [Changelog](CHANGELOG.md)

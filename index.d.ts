@@ -92,16 +92,21 @@ export declare class AudioRecorder {
   getLevels(): AudioLevels
 }
 
-/** A queue for managing multiple audio sources that play in sequence */
+/**
+ * A queue for managing multiple audio sources that play in sequence.
+ *
+ * The state is held behind an `Arc` so producer and consumer wrappers can be
+ * explicitly created for the same queue.
+ */
 export declare class AudioSourceQueue {
   constructor()
-  /** Add an audio source from a file */
+  /** Add an audio source from a file. */
   addSource(filePath: string, title?: string | undefined | null): string
-  /** Add an audio source from a buffer */
+  /** Add an audio source from a buffer. */
   addBuffer(buffer: Array<number>, title?: string | undefined | null): string
-  /** Remove a source by its ID */
+  /** Remove a source by its ID. */
   removeSource(sourceId: string): void
-  /** Get a specific source by its ID */
+  /** Get a specific source by its ID. */
   getSource(sourceId: string): AudioQueueItem
   getSources(): Array<AudioQueueItem>
   getLength(): number
@@ -124,7 +129,7 @@ export declare class AudioStream {
   /** Play base64 encoded audio data */
   playBase64(base64Data: string): void
   /** Get the current playback state */
-  getState(): PlayError
+  getState(): PlaybackState
   /** Check if audio is currently playing */
   isPlaying(): boolean
   /** Pause the stream */
@@ -203,73 +208,75 @@ export declare class LoopedDecoder {
   getLoopCount(): number
   /** Set the loop count (use u32::MAX for infinite) */
   setLoopCount(count: number): void
-  /** Decode with loops applied */
+  /**
+   * Decode with loops applied. Infinite looping cannot be materialized into
+   * a finite vector and returns an error.
+   */
   decodeLooped(): Array<number>
   /** Get reference to inner decoder */
   getDecoder(): AudioDecoder
 }
 
-/** A mixer that combines multiple audio sources into a single output stream */
+/** A mixer that combines multiple audio sources into a single output stream. */
 export declare class Mixer {
-  /** Create a new mixer with default settings (44100 Hz, stereo, max 16 sources) */
+  /** Create a new mixer with default settings (44100 Hz, stereo, max 16 sources). */
   constructor()
-  /** Create a mixer with custom configuration */
+  /** Create a mixer with custom configuration. */
   static withConfig(sampleRate: number, channels: number, maxSources: number): Mixer
-  /** Add an audio source to the mixer */
+  /** Add an audio source to the mixer. */
   addSource(source: MixerSource): void
-  /** Remove a source by its ID */
+  /** Remove a source by its ID. */
   removeSource(sourceId: string): void
-  /** Get all current sources */
+  /** Get all current sources. */
   getSources(): Array<MixerSource>
-  /** Get the number of sources */
+  /** Get the number of sources. */
   getSourceCount(): number
-  /** Clear all sources */
+  /** Clear all sources. */
   clear(): void
-  /**
-   * Mix all sources at a specific time point (synchronous operation)
-   * Returns a buffer of mixed samples
-   */
+  /** Mix all sources at a specific time point. */
   sampleAt(timeMs: number): Array<number>
-  /** Start mixing multiple sources in real-time (simulated) */
+  /** Start mixing multiple sources in real time. */
   startMixing(): void
-  /** Stop all mixing */
+  /** Stop all mixing. */
   stopMixing(): void
-  /** Get the sample rate of the mixer */
+  /** Check whether a real-time mixer stream is running. */
+  isMixing(): boolean
+  /** Get the sample rate of the mixer. */
   getSampleRate(): number
-  /** Get the channel count of the mixer */
+  /** Get the channel count of the mixer. */
   getChannels(): number
-  /** Set the master volume (0.0 to 1.0) */
+  /** Set the master volume (0.0 to 1.0). */
   setMasterVolume(volume: number): void
-  /** Get the master volume */
+  /** Get the master volume. */
   getMasterVolume(): number
 }
 
-/** A source that can be added to a mixer */
+/** A source that can be added to a mixer. */
 export declare class MixerSource {
   constructor(id: string, samples: Array<number>, sampleRate: number, channels: number)
-  /** Get source ID */
+  /** Get source ID. */
   getId(): string
-  /** Get audio samples */
+  /** Get audio samples. */
   getSamples(): Array<number>
-  /** Get samples at a specific time (simplified to return relative audio) */
+  /** Get one source frame at a specific time. */
   getSamplesAt(timeMs: number): Array<number>
-  /** Get sample rate */
+  /** Get sample rate. */
   getSampleRate(): number
-  /** Get channels */
+  /** Get channels. */
   getChannels(): number
-  /** Set volume (0.0 to 1.0) */
+  /** Set volume (0.0 to 1.0). */
   setVolume(volume: number): void
-  /** Get volume */
+  /** Get volume. */
   getVolume(): number
-  /** Set pan (-1.0 left, 0.0 center, 1.0 right) */
+  /** Set pan (-1.0 left, 0.0 center, 1.0 right). */
   setPan(pan: number): void
-  /** Get pan */
+  /** Get pan. */
   getPan(): number
-  /** Enable or disable source */
+  /** Enable or disable source. */
   setEnabled(enabled: boolean): void
-  /** Check if source is enabled */
+  /** Check if source is enabled. */
   isEnabled(): boolean
-  /** Get duration in milliseconds */
+  /** Get duration in milliseconds. */
   durationMs(): number
 }
 
@@ -283,11 +290,12 @@ export declare class PinkNoise {
 
 /** Sample rate converter - handles converting between different sample rates (e.g., 44100 to 48000) */
 export declare class SampleRateConverter {
-  constructor(sourceRate: number, targetRate: number)
+  constructor(sourceRate: number, targetRate: number, channels?: number | undefined | null)
   /** Convert audio samples from source rate to target rate using linear interpolation */
   convert(samples: Array<number>): Array<number>
   sourceRate(): number
   targetRate(): number
+  channels(): number
 }
 
 /** A buffer containing audio samples */
@@ -306,7 +314,7 @@ export declare class SamplesBuffer {
   getSamples(): Array<number>
   /** Create a buffer from raw bytes (16-bit little-endian samples) */
   static fromBytes(bytes: Array<number>, channels: number, sampleRate: number): SamplesBuffer
-  /** Play this buffer with the given sink */
+  /** Play this buffer asynchronously; returns after the output stream starts. */
   play(): void
 }
 
@@ -321,14 +329,18 @@ export declare class SampleTypeConverter {
 
 export declare class SourcesQueueInput {
   constructor()
+  /** Create a producer connected to an existing queue. */
+  static fromQueue(queue: AudioSourceQueue): SourcesQueueInput
   pushFile(filePath: string): string
   pushBuffer(buffer: Array<number>): string
   setTitle(sourceId: string, title: string): void
 }
 
-/** Queue output interface - for consuming sources from a queue */
+/** Queue output interface - for consuming sources from a queue. */
 export declare class SourcesQueueOutput {
   constructor()
+  /** Create a consumer connected to an existing queue. */
+  static fromQueue(queue: AudioSourceQueue): SourcesQueueOutput
   peek(): AudioQueueItem
   pop(): AudioQueueItem
   hasNext(): boolean
@@ -500,7 +512,7 @@ export declare function isFormatSupported(format: string): boolean
  */
 export declare function linearToDb(linear: number): number
 
-/** Create a new mixer instance */
+/** Create a new mixer instance. */
 export declare function mixer(maxSources?: number | undefined | null): Mixer
 
 /** Create pink noise (with 1/f frequency spectrum) */
@@ -509,10 +521,7 @@ export declare function pink(durationMs: number, sampleRate: number, channels: n
 /** Create and open a stream for audio playback */
 export declare function play(filePath: string): AudioStream
 
-/**
- * Audio player state enumeration
- * Audio player state enumeration
- */
+/** Audio player state enumeration */
 export declare const enum PlaybackState {
   Stopped = 'Stopped',
   Loaded = 'Loaded',
@@ -527,7 +536,7 @@ export declare const enum PlayError {
   SystemError = 'SystemError'
 }
 
-/** Creates a new audio source queue */
+/** Creates a new audio source queue. */
 export declare function queue(): AudioSourceQueue
 
 export declare function quickPlay(filePath: string, config?: AudioPlayerConfig | undefined | null): AudioPlayer
@@ -613,6 +622,7 @@ export interface SupportedStreamConfig {
   sampleWidth: number
 }
 
+/** Start a sine-wave test tone without blocking the JavaScript thread. */
 export declare function testTone(frequency: number, durationMs: number): void
 
 /** Create white noise (neutral frequency spectrum) */

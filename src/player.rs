@@ -7,12 +7,54 @@ use std::fs::File;
 use std::io::{BufReader, Cursor};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
-// Importamos los tipos definidos en el otro módulo
+// Import the types defined in the other module.
 use crate::debug_log;
 use crate::types::{AudioDeviceInfo, AudioPlayerConfig, PlaybackState};
 
 const DEVICE_ID_SEPARATOR: char = ':';
+
+#[derive(Default)]
+struct PlaybackClock {
+    position: f64,
+    interval_started_at: Option<Instant>,
+}
+
+impl PlaybackClock {
+    fn start(&mut self, now: Instant, reset_position: bool) {
+        if reset_position {
+            self.position = 0.0;
+        }
+        self.interval_started_at = Some(now);
+    }
+
+    fn pause(&mut self, now: Instant) {
+        if let Some(started_at) = self.interval_started_at.take() {
+            self.position += now.duration_since(started_at).as_secs_f64();
+        }
+    }
+
+    fn reset(&mut self) {
+        self.position = 0.0;
+        self.interval_started_at = None;
+    }
+
+    fn seek(&mut self, position: f64, now: Instant) {
+        self.position = position;
+        self.interval_started_at = Some(now);
+    }
+
+    fn current(&self, now: Instant, duration: f64) -> f64 {
+        let elapsed = self
+            .interval_started_at
+            .map(|started_at| now.duration_since(started_at).as_secs_f64())
+            .unwrap_or(0.0);
+        (self.position + elapsed)
+            .max(0.0)
+            .min(if duration > 0.0 { duration } else { f64::MAX })
+    }
+}
 
 /// Thread-safe audio player with rodio backend
 #[napi]
@@ -37,9 +79,10 @@ pub struct AudioPlayer {
     buffer_channels: u16,
     // Track if player was ever initialized
     initialized: bool,
-    // Track current playback time (using Unix timestamp for napi compatibility)
-    start_time: Arc<Mutex<Option<u128>>>,
-    total_paused_ns: Arc<Mutex<u128>>,
+    // Playback position accumulated before the current playing interval.
+    // Monotonic clock for the current playing interval. Keeping this separate
+    // from the accumulated position makes pause/resume timing unambiguous.
+    clock: Arc<Mutex<PlaybackClock>>,
 }
 
 impl Default for AudioPlayer {
@@ -55,8 +98,7 @@ impl Default for AudioPlayer {
             buffer_sample_rate: 0,
             buffer_channels: 0,
             initialized: false,
-            start_time: Arc::new(Mutex::new(None)),
-            total_paused_ns: Arc::new(Mutex::new(0)),
+            clock: Arc::new(Mutex::new(PlaybackClock::default())),
         }
     }
 }
@@ -280,30 +322,24 @@ impl AudioPlayer {
             self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
         );
 
-        // Track playback time
-        {
-            let mut start_time_guard = self.start_time.lock().unwrap_or_else(|e| e.into_inner());
-            let mut total_paused_guard = self
-                .total_paused_ns
+        // Start a new clock only for a fresh playback or a resume. Calling
+        // play() while already playing is intentionally idempotent.
+        let current_state = self.state.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let sink_is_empty = self
+            .sink
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|sink| sink.empty())
+            .unwrap_or(true);
+        let starts_new_track = current_state == PlaybackState::Loaded
+            || current_state == PlaybackState::Stopped
+            || (current_state == PlaybackState::Playing && sink_is_empty);
+        if current_state != PlaybackState::Playing || starts_new_track {
+            self.clock
                 .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let current_state = self.state.lock().unwrap_or_else(|e| e.into_inner()).clone();
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or(std::time::Duration::ZERO)
-                .as_nanos();
-
-            if current_state == PlaybackState::Paused {
-                // Resuming from pause - calculate how long we were paused
-                if let Some(pause_start_ns) = *start_time_guard {
-                    let paused_ns = now.saturating_sub(pause_start_ns);
-                    *total_paused_guard = total_paused_guard.saturating_add(paused_ns);
-                }
-            } else {
-                // Fresh start - reset everything
-                *total_paused_guard = 0;
-            }
-            *start_time_guard = Some(now);
+                .unwrap_or_else(|e| e.into_inner())
+                .start(Instant::now(), starts_new_track);
         }
 
         // Always ensure sink is available - recreate if needed
@@ -409,14 +445,19 @@ impl AudioPlayer {
             return Ok(());
         }
 
-        // Track pause start time
-        {
-            let mut start_time_guard = self.start_time.lock().unwrap_or_else(|e| e.into_inner());
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or(std::time::Duration::ZERO)
-                .as_nanos();
-            *start_time_guard = Some(now);
+        // Commit the elapsed part of the current playing interval and stop
+        // that interval. The paused duration is therefore never subtracted
+        // from the playback position on resume.
+        if current_state == PlaybackState::Playing {
+            self.clock
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .pause(Instant::now());
+        } else {
+            self.clock
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .interval_started_at = None;
         }
 
         let sink_guard = self.sink.lock().unwrap_or_else(|e| e.into_inner());
@@ -445,16 +486,8 @@ impl AudioPlayer {
             return Err(Error::new(Status::InvalidArg, "Player not initialized"));
         }
 
-        // Reset time tracking
-        {
-            let mut start_time_guard = self.start_time.lock().unwrap_or_else(|e| e.into_inner());
-            let mut total_paused_guard = self
-                .total_paused_ns
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            *start_time_guard = None;
-            *total_paused_guard = 0;
-        }
+        // Reset time tracking.
+        self.clock.lock().unwrap_or_else(|e| e.into_inner()).reset();
 
         if let Some(sink) = self.sink.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             debug_log!("Stopping sink");
@@ -515,30 +548,12 @@ impl AudioPlayer {
 
     #[napi]
     pub fn get_current_time(&self) -> Result<f64> {
-        let start_time_opt = *self.start_time.lock().unwrap_or_else(|e| e.into_inner());
-
-        if let Some(start_time_ns) = start_time_opt {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or(std::time::Duration::ZERO)
-                .as_nanos();
-            let total_paused_ns = *self
-                .total_paused_ns
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let playing_ns = now
-                .saturating_sub(start_time_ns)
-                .saturating_sub(total_paused_ns);
-            let mut current = playing_ns as f64 / 1_000_000_000.0;
-            // Clamp to duration so the clock stops when the track ends.
-            let duration = *self.duration.lock().unwrap_or_else(|e| e.into_inner());
-            if duration > 0.0 && current > duration {
-                current = duration;
-            }
-            Ok(current)
-        } else {
-            Ok(0.0)
-        }
+        let duration = *self.duration.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(self
+            .clock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .current(Instant::now(), duration))
     }
 
     #[napi]
@@ -594,25 +609,6 @@ impl AudioPlayer {
         *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackState::Stopped;
         debug_log!("Sink stopped for seek");
-
-        // Reset time tracking for new playback position
-        {
-            let mut start_time_guard = self.start_time.lock().unwrap_or_else(|e| e.into_inner());
-            let mut total_paused_guard = self
-                .total_paused_ns
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or(std::time::Duration::ZERO)
-                .as_nanos();
-
-            // Calculate the effective start time (now minus the seek position)
-            // Use saturating arithmetic to prevent underflow
-            let seek_position_ns = (position * 1_000_000_000.0) as u128;
-            *start_time_guard = Some(now.saturating_sub(seek_position_ns));
-            *total_paused_guard = 0;
-        }
 
         // Recreate output stream and sink only if needed
         {
@@ -704,6 +700,10 @@ impl AudioPlayer {
             }
 
             sink.play();
+            self.clock
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .seek(position, Instant::now());
             *self.state.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackState::Playing;
             debug_log!("Seek complete, playing from position: {}s", position);
         }
@@ -740,6 +740,33 @@ pub fn quick_play(file_path: String, config: Option<AudioPlayerConfig>) -> Resul
         player.play()?;
     }
     Ok(player)
+}
+
+#[cfg(test)]
+mod playback_clock_tests {
+    use super::PlaybackClock;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn playback_clock_preserves_position_across_pause_and_resume() {
+        let base = Instant::now();
+        let mut clock = PlaybackClock::default();
+
+        clock.start(base, true);
+        clock.pause(base + Duration::from_secs(10));
+        assert!((clock.current(base + Duration::from_secs(15), 60.0) - 10.0).abs() < 1e-9);
+
+        clock.start(base + Duration::from_secs(15), false);
+        assert!((clock.current(base + Duration::from_secs(20), 60.0) - 15.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn playback_clock_clamps_to_duration() {
+        let base = Instant::now();
+        let mut clock = PlaybackClock::default();
+        clock.start(base, true);
+        assert_eq!(clock.current(base + Duration::from_secs(20), 5.0), 5.0);
+    }
 }
 
 /// Compute the interleaved-sample offset to skip when seeking within decoded

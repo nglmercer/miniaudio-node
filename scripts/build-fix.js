@@ -3,7 +3,7 @@
 import { spawn } from "child_process";
 import process from "process";
 
-// Asegurar que las variables están establecidas
+// Ensure the required variables are set.
 process.env.NAPI_RS_LINK_TYPE = "dynamic";
 process.env.NAPI_RS_DYNAMIC_RUNTIME = "yes";
 

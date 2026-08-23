@@ -5,7 +5,7 @@
  * using Bun's built-in test runner with cross-platform compatibility.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it as bunIt, expect, beforeEach, afterEach } from "bun:test";
 const {
   AudioPlayer,
   initializeAudio,
@@ -25,7 +25,34 @@ import {
   isAudioSystemAvailable,
   PLATFORM,
 } from "../utils/test-helpers.js";
+const it = bunIt.skipIf(!isAudioSystemAvailable());
 setDebug(false);
+
+function makeSilenceWav(durationMs: number, sampleRate = 44_100): number[] {
+  const dataSize = Math.floor((sampleRate * durationMs) / 1000) * 2;
+  const bytes = new Uint8Array(44 + dataSize);
+  const view = new DataView(bytes.buffer);
+  const writeAscii = (offset: number, value: string) => {
+    for (let index = 0; index < value.length; index++) {
+      bytes[offset + index] = value.charCodeAt(index);
+    }
+  };
+
+  writeAscii(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeAscii(8, "WAVE");
+  writeAscii(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(36, "data");
+  view.setUint32(40, dataSize, true);
+  return Array.from(bytes);
+}
 
 describe("AudioPlayer", () => {
   let player: typeof AudioPlayer | any = null;
@@ -434,6 +461,40 @@ describe("AudioPlayer", () => {
       const currentTime = player.getCurrentTime();
       expect(typeof currentTime).toBe("number");
       expect(currentTime).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  describe("Playback timing", () => {
+    it("preserves position across pause/resume and supports seek", async () => {
+      if (!isAudioSystemAvailable()) {
+        console.warn("Skipping test: Audio system not available");
+        return;
+      }
+
+      const timingPlayer = new AudioPlayer();
+      try {
+        timingPlayer.loadBuffer(makeSilenceWav(2_000));
+        timingPlayer.play();
+        await Bun.sleep(120);
+
+        const beforePause = timingPlayer.getCurrentTime();
+        expect(beforePause).toBeGreaterThan(0.02);
+
+        timingPlayer.pause();
+        const pausedAt = timingPlayer.getCurrentTime();
+        await Bun.sleep(120);
+        expect(Math.abs(timingPlayer.getCurrentTime() - pausedAt)).toBeLessThan(0.08);
+
+        timingPlayer.play();
+        await Bun.sleep(120);
+        expect(timingPlayer.getCurrentTime()).toBeGreaterThan(pausedAt + 0.02);
+
+        timingPlayer.seekTo(0.5);
+        expect(timingPlayer.getCurrentTime()).toBeGreaterThanOrEqual(0.49);
+        expect(timingPlayer.getCurrentTime()).toBeLessThan(0.6);
+      } finally {
+        timingPlayer.stop();
+      }
     });
   });
 });
