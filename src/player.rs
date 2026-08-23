@@ -56,6 +56,10 @@ impl PlaybackClock {
             .max(0.0)
             .min(if duration > 0.0 { duration } else { f64::MAX })
     }
+
+    fn reached_end(&self, now: Instant, duration: f64) -> bool {
+        duration.is_finite() && duration > 0.0 && self.current(now, duration) >= duration
+    }
 }
 
 /// Thread-safe audio player with rodio backend
@@ -542,12 +546,21 @@ impl AudioPlayer {
             .map(|sink| sink.empty())
             .unwrap_or(true);
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if *state == PlaybackState::Playing && sink_empty {
+        if *state == PlaybackState::Playing {
             let duration = *self.duration.lock().unwrap_or_else(|e| e.into_inner());
             let mut clock = self.clock.lock().unwrap_or_else(|e| e.into_inner());
-            clock.position = duration;
-            clock.interval_started_at = None;
-            *state = PlaybackState::Stopped;
+            // Some CoreAudio devices keep a finished rodio source queued when
+            // output is unavailable or delayed, so `Sink::empty()` is not a
+            // sufficient EOF signal on every host. The monotonic playback
+            // clock is authoritative when the loaded source has a duration;
+            // retain the sink check for sources without duration metadata.
+            if sink_empty || clock.reached_end(Instant::now(), duration) {
+                if duration.is_finite() && duration > 0.0 {
+                    clock.position = duration;
+                }
+                clock.interval_started_at = None;
+                *state = PlaybackState::Stopped;
+            }
         }
         state.clone()
     }
@@ -774,6 +787,15 @@ mod playback_clock_tests {
         let mut clock = PlaybackClock::default();
         clock.start(base, true);
         assert_eq!(clock.current(base + Duration::from_secs(20), 5.0), 5.0);
+    }
+
+    #[test]
+    fn playback_clock_detects_end_without_sink_state() {
+        let base = Instant::now();
+        let mut clock = PlaybackClock::default();
+        clock.start(base, true);
+        assert!(!clock.reached_end(base + Duration::from_millis(79), 0.08));
+        assert!(clock.reached_end(base + Duration::from_millis(81), 0.08));
     }
 }
 
