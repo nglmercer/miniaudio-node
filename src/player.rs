@@ -13,6 +13,7 @@ use std::time::Instant;
 // Import the types defined in the other module.
 use crate::debug_log;
 use crate::types::{AudioDeviceInfo, AudioPlayerConfig, PlaybackState};
+use crate::utils::set_debug;
 
 const DEVICE_ID_SEPARATOR: char = ':';
 
@@ -722,6 +723,9 @@ pub fn create_audio_player(config: Option<AudioPlayerConfig>) -> Result<AudioPla
         if let Some(vol) = cfg.volume {
             player.set_volume(vol)?;
         }
+        if let Some(debug) = cfg.debug {
+            set_debug(debug);
+        }
     }
     Ok(player)
 }
@@ -732,6 +736,9 @@ pub fn quick_play(file_path: String, config: Option<AudioPlayerConfig>) -> Resul
     if let Some(cfg) = config.as_ref() {
         if let Some(vol) = cfg.volume {
             player.set_volume(vol)?;
+        }
+        if let Some(debug) = cfg.debug {
+            set_debug(debug);
         }
     }
     player.load_file(file_path)?;

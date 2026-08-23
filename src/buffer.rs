@@ -1,5 +1,6 @@
 //! Audio buffer types for sample data storage and manipulation
 
+use napi::{Error, Result, Status};
 use napi_derive::napi;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -13,12 +14,40 @@ pub struct SamplesBuffer {
 }
 
 impl SamplesBuffer {
-    pub fn new(channels: u16, sample_rate: u32, samples: Vec<i16>) -> Self {
+    fn new(channels: u16, sample_rate: u32, samples: Vec<i16>) -> Self {
         SamplesBuffer {
             sample_rate,
             channels,
             samples: Arc::new(Mutex::new(samples)),
         }
+    }
+
+    fn validate_format(channels: u32, sample_rate: u32, sample_count: usize) -> Result<u16> {
+        if channels == 0 {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Channel count must be greater than zero",
+            ));
+        }
+        if channels > u16::MAX as u32 {
+            return Err(Error::new(
+                Status::InvalidArg,
+                format!("Channel count must not exceed {}", u16::MAX),
+            ));
+        }
+        if sample_rate == 0 {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Sample rate must be greater than zero",
+            ));
+        }
+        if !sample_count.is_multiple_of(channels as usize) {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Interleaved samples must contain a complete frame",
+            ));
+        }
+        Ok(channels as u16)
     }
 }
 
@@ -26,8 +55,9 @@ impl SamplesBuffer {
 impl SamplesBuffer {
     /// Create a new samples buffer
     #[napi(constructor)]
-    pub fn create(channels: u32, sample_rate: u32, samples: Vec<i16>) -> Self {
-        Self::new(channels as u16, sample_rate, samples)
+    pub fn create(channels: u32, sample_rate: u32, samples: Vec<i16>) -> Result<Self> {
+        let channels = Self::validate_format(channels, sample_rate, samples.len())?;
+        Ok(Self::new(channels, sample_rate, samples))
     }
 
     /// Get the number of channels in this buffer (1=mono, 2=stereo)
@@ -52,6 +82,9 @@ impl SamplesBuffer {
     /// Get the duration of this buffer in seconds
     #[napi]
     pub fn get_duration(&self) -> f64 {
+        if self.sample_rate == 0 || self.channels == 0 {
+            return 0.0;
+        }
         self.get_len() as f64 / (self.sample_rate as f64 * self.channels as f64)
     }
 
@@ -64,14 +97,21 @@ impl SamplesBuffer {
 
     /// Create a buffer from raw bytes (16-bit little-endian samples)
     #[napi(factory)]
-    pub fn from_bytes(bytes: Vec<u8>, channels: u32, sample_rate: u32) -> Self {
+    pub fn from_bytes(bytes: Vec<u8>, channels: u32, sample_rate: u32) -> Result<Self> {
+        if !bytes.len().is_multiple_of(2) {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Raw PCM bytes must contain complete 16-bit samples",
+            ));
+        }
         let samples: Vec<i16> = bytes
             .as_chunks::<2>()
             .0
             .iter()
             .map(|chunk| i16::from_le_bytes(*chunk))
             .collect();
-        Self::new(channels as u16, sample_rate, samples)
+        let channels = Self::validate_format(channels, sample_rate, samples.len())?;
+        Ok(Self::new(channels, sample_rate, samples))
     }
 
     /// Play this buffer asynchronously; returns after the output stream starts.
@@ -186,10 +226,11 @@ pub struct StaticSamplesBuffer {
 #[napi]
 impl StaticSamplesBuffer {
     #[napi(constructor)]
-    pub fn new(channels: u32, sample_rate: u32, samples: Vec<i16>) -> Self {
-        StaticSamplesBuffer {
-            inner: SamplesBuffer::new(channels as u16, sample_rate, samples),
-        }
+    pub fn new(channels: u32, sample_rate: u32, samples: Vec<i16>) -> Result<Self> {
+        let channels = SamplesBuffer::validate_format(channels, sample_rate, samples.len())?;
+        Ok(StaticSamplesBuffer {
+            inner: SamplesBuffer::new(channels, sample_rate, samples),
+        })
     }
 
     #[napi]
@@ -199,5 +240,23 @@ impl StaticSamplesBuffer {
             channels: self.inner.channels,
             samples: self.inner.samples.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constructors_reject_invalid_audio_metadata_and_alignment() {
+        assert!(SamplesBuffer::create(0, 44_100, Vec::new()).is_err());
+        assert!(SamplesBuffer::create(2, 0, Vec::new()).is_err());
+        assert!(SamplesBuffer::create(70_000, 44_100, Vec::new()).is_err());
+        assert!(SamplesBuffer::create(2, 44_100, vec![1]).is_err());
+        assert!(SamplesBuffer::from_bytes(vec![1], 1, 44_100).is_err());
+
+        let buffer = SamplesBuffer::from_bytes(vec![0x34, 0x12], 1, 44_100).unwrap();
+        assert_eq!(buffer.get_samples(), vec![0x1234]);
+        assert!((buffer.get_duration() - (1.0 / 44_100.0)).abs() < f64::EPSILON);
     }
 }

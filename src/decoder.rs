@@ -26,6 +26,7 @@ fn collect_source_slice<S: Source<Item = f32>>(
 
 /// Decoder for audio files in various formats (WAV, MP3, FLAC, OGG, etc.)
 #[napi]
+#[derive(Clone)]
 pub struct AudioDecoder {
     data: Arc<Mutex<Option<Vec<u8>>>>,
     file_path: Option<String>,
@@ -425,44 +426,10 @@ impl LoopedDecoder {
     /// Get reference to inner decoder
     #[napi]
     pub fn get_decoder(&self) -> AudioDecoder {
-        // Return a copy of the decoder
-        if let Some(path) = &self.decoder.file_path {
-            AudioDecoder::from_file_with_config(
-                path.clone(),
-                self.decoder.target_sample_rate,
-                self.decoder.target_channels,
-            )
-            .unwrap_or_else(|_| AudioDecoder {
-                data: Arc::new(Mutex::new(None)),
-                file_path: None,
-                source_sample_rate: 44100,
-                source_channels: 2,
-                sample_rate: 44100,
-                channels: 2,
-                duration: 0.0,
-                target_sample_rate: None,
-                target_channels: None,
-            })
-        } else {
-            let data_guard = self.decoder.data.lock().unwrap_or_else(|e| e.into_inner());
-            let data = data_guard.as_ref().cloned().unwrap_or_default();
-            AudioDecoder::from_data_with_config(
-                data,
-                self.decoder.target_sample_rate,
-                self.decoder.target_channels,
-            )
-            .unwrap_or_else(|_| AudioDecoder {
-                data: Arc::new(Mutex::new(None)),
-                file_path: None,
-                source_sample_rate: 44100,
-                source_channels: 2,
-                sample_rate: 44100,
-                channels: 2,
-                duration: 0.0,
-                target_sample_rate: None,
-                target_channels: None,
-            })
-        }
+        // Preserve the validated decoder state instead of reopening the source.
+        // A later decode/reset operation will report a real missing or corrupt
+        // source error rather than receiving fabricated fallback metadata.
+        self.decoder.clone()
     }
 }
 

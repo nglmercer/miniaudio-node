@@ -64,7 +64,7 @@ const recentSamples = recorder.getRingBufferSamples();
 recorder.stop();
 ```
 
-`setRingBufferSize()` bounds the retained history in samples. When the limit is reached, new samples replace the oldest samples. `getBuffer()` returns the retained samples as a `SamplesBuffer`; `clear()` removes the retained history. `setOnData()` receives incoming sample chunks, and `getLevels()` reports peak and RMS levels.
+`setRingBufferSize()` bounds the retained history in samples. `getRingBufferSamples()` returns a non-destructive snapshot, so repeated reads do not consume the retained samples. `getBuffer()` returns the retained samples as a `SamplesBuffer`; `clear()` empties both retained stores and resets peak/RMS levels. `setOnData()` receives incoming sample chunks, and `getLevels()` reports peak and RMS levels.
 
 Pass a device ID returned by `getInputDevices()` to `start(deviceId)`. Malformed or unknown IDs are rejected; they never fall back to the first input device.
 
@@ -82,7 +82,7 @@ console.log(passthrough.getSampleRate(), passthrough.getChannels());
 passthrough.stop();
 ```
 
-Input and output streams negotiate their formats independently. The passthrough converts sample rate and channel layout when the devices do not expose identical configurations. Use `AudioPassthrough.getInputDevices()` and `getOutputDevices()` to inspect available devices.
+Input and output streams negotiate their formats independently. The passthrough converts sample rate and channel layout when the devices do not expose identical configurations and normalizes supported CPAL integer/float input formats before transport. Use `AudioPassthrough.getInputDevices()` and `getOutputDevices()` to inspect devices across the available host backends; returned IDs include the host name.
 
 ### `AudioStream` and `AudioStreamBuilder`
 
@@ -137,7 +137,7 @@ console.log(buffer.getDuration());
 buffer.play(); // returns after the output stream starts
 ```
 
-`SamplesBuffer.fromBytes()` interprets bytes as little-endian 16-bit samples. `StaticSamplesBuffer` owns a buffer and exposes it through `getInner()`.
+`SamplesBuffer.fromBytes()` interprets bytes as little-endian 16-bit samples and rejects odd byte counts. Constructors reject zero rates or channels, channel counts above the native limit, and incomplete interleaved frames. `StaticSamplesBuffer` owns a buffer and exposes it through `getInner()`.
 
 ## Converters
 
@@ -147,7 +147,7 @@ All converter inputs use interleaved samples. A stereo frame is `[left, right]`;
 | --- | --- |
 | `SampleRateConverter` | Fractional-rate linear interpolation per channel, for example 48,000 Hz to 44,100 Hz. Pass the channel count when converting interleaved multichannel data. |
 | `ChannelCountConverter` | Convert mono, stereo, and arbitrary channel layouts frame by frame. |
-| `SampleTypeConverter` | Convert between supported 8-, 16-, 24-, and 32-bit sample representations. |
+| `SampleTypeConverter` | Convert between supported 8-, 16-, 24-, and 32-bit sample representations; unsupported bit depths are rejected. |
 
 For multichannel data, construct `SampleRateConverter(sourceRate, targetRate, channels)` so interpolation never crosses channel boundaries.
 

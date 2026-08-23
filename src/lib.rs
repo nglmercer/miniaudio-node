@@ -78,7 +78,7 @@ mod tests {
 
     #[test]
     fn test_buffer_creation() {
-        let buffer = buffer::SamplesBuffer::create(2, 44100, vec![0i16; 4410]);
+        let buffer = buffer::SamplesBuffer::create(2, 44100, vec![0i16; 4410]).unwrap();
         assert_eq!(buffer.get_channels(), 2);
         assert_eq!(buffer.get_sample_rate(), 44100);
         assert_eq!(buffer.get_len(), 4410);

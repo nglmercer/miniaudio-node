@@ -20,11 +20,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hernan-lc/miniaudio-node.git"
+    "url": "git+https://github.com/nglmercer/miniaudio-node.git"
   },
-  "homepage": "https://github.com/hernan-lc/miniaudio-node#readme",
+  "homepage": "https://github.com/nglmercer/miniaudio-node#readme",
   "bugs": {
-    "url": "https://github.com/hernan-lc/miniaudio-node/issues"
+    "url": "https://github.com/nglmercer/miniaudio-node/issues"
   },
   "scripts": {
     "build": "napi build --platform --release",
@@ -32,7 +32,7 @@
     "build:watch": "napi build --watch",
     "test": "bun test",
     "test:deterministic": "bun test tests/unit/deterministic.test.ts",
-    "test:hardware": "bun test tests/unit/audio-player.test.ts tests/integration/playback.test.ts",
+    "test:hardware": "bun test tests/hardware/audio-paths.test.ts tests/unit/audio-player.test.ts tests/integration/playback.test.ts",
     "tsc": "tsc",
     "lint": "cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings",
     "format": "cargo fmt --all",

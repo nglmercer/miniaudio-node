@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Completed configured `AudioStreamBuilder` and `DecoderBuilder` behavior, real-time `Mixer` controls, bounded recorder retention, and connected queue producer/consumer wrappers.
 - Made `SamplesBuffer.play()` and `testTone()` non-blocking.
 - Removed Opus from supported-format reporting because it is not enabled by the default Rodio decoder features.
+- Validated `SamplesBuffer` metadata and sample alignment, rejected unsupported `SampleTypeConverter` bit depths, and propagated looped-decoder source failures.
+- Made recorder ring-buffer reads snapshot-based, made `clear()` empty all retained state and reset levels, and applied `AudioPlayerConfig.debug` consistently.
+- Removed per-frame mixer allocations and per-sample passthrough mutexes with preallocated render/callback buffers and split producer/consumer handles.
 
 ### 🔧 Maintenance
 

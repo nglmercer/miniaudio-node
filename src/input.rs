@@ -1,11 +1,15 @@
 use crate::buffer::SamplesBuffer;
 use crate::types::AudioDeviceInfo;
+use arc_swap::ArcSwapOption;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
+use ringbuf::traits::{Consumer, Producer, Split};
+use ringbuf::{HeapCons, HeapRb};
 use rodio::cpal;
 use rodio::cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::sync::atomic::{AtomicBool, Ordering};
+use rodio::cpal::Sample;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 type OnDataCallback = Box<dyn Fn(Vec<i16>) + Send + Sync>;
 
@@ -14,6 +18,7 @@ const DEFAULT_CHANNELS: u16 = 1;
 const DEFAULT_RESERVE_SECONDS: u32 = 10;
 const DEVICE_ID_SEPARATOR: char = ':';
 const I16_MAX_F32: f32 = 32768.0;
+const INPUT_CHUNK_SIZE: usize = 4096;
 #[cfg(target_os = "linux")]
 const PREFERRED_LINUX_BUFFER_SIZE: u32 = 1024;
 
@@ -41,6 +46,60 @@ pub(crate) fn append_bounded(target: &mut Vec<i16>, data: &[i16], capacity: Opti
         target.drain(..required_drop.min(target.len()));
     }
     target.extend_from_slice(data);
+}
+
+fn process_typed_recording<T: Copy, F: FnMut(&[i16])>(
+    data: &[T],
+    scratch: &mut [i16; INPUT_CHUNK_SIZE],
+    convert: fn(T) -> i16,
+    process: &mut F,
+) {
+    for chunk in data.chunks(INPUT_CHUNK_SIZE) {
+        for (index, sample) in chunk.iter().copied().enumerate() {
+            scratch[index] = convert(sample);
+        }
+        process(&scratch[..chunk.len()]);
+    }
+}
+
+fn f32_to_i16(sample: f32) -> i16 {
+    (sample.clamp(-1.0, 1.0) * I16_MAX_F32) as i16
+}
+
+fn f64_to_i16(sample: f64) -> i16 {
+    (sample.clamp(-1.0, 1.0) * I16_MAX_F32 as f64) as i16
+}
+
+fn i8_to_i16(sample: i8) -> i16 {
+    (sample as i16) << 8
+}
+
+fn i24_to_i16(sample: cpal::I24) -> i16 {
+    sample.to_sample()
+}
+
+fn i32_to_i16(sample: i32) -> i16 {
+    (sample >> 16) as i16
+}
+
+fn i64_to_i16(sample: i64) -> i16 {
+    (sample >> 48) as i16
+}
+
+fn u8_to_i16(sample: u8) -> i16 {
+    ((sample as i16) - 128) << 8
+}
+
+fn u16_to_i16(sample: u16) -> i16 {
+    (sample as i32 - 32_768) as i16
+}
+
+fn u32_to_i16(sample: u32) -> i16 {
+    ((sample as i64 - 2_147_483_648) >> 16) as i16
+}
+
+fn u64_to_i16(sample: u64) -> i16 {
+    ((sample as i128 - 9_223_372_036_854_775_808i128) >> 48) as i16
 }
 
 #[napi(object)]
@@ -180,14 +239,14 @@ pub struct AudioRecorder {
     // size is configured this vector keeps the same bounded latest-samples
     // window instead of growing for the lifetime of the recorder.
     recorded_samples: Arc<Mutex<Vec<i16>>>,
-    ring_buffer: Arc<Mutex<Option<ringbuf::HeapRb<i16>>>>,
+    ring_buffer_consumer: Arc<Mutex<Option<HeapCons<i16>>>>,
     recorded_capacity: Arc<Mutex<Option<usize>>>,
-    on_data_callback: Arc<Mutex<Option<OnDataCallback>>>,
+    on_data_callback: Arc<ArcSwapOption<OnDataCallback>>,
     is_recording: Arc<AtomicBool>,
     sample_rate: u32,
     channels: u16,
-    last_peak: Arc<Mutex<f64>>,
-    last_rms: Arc<Mutex<f64>>,
+    last_peak: Arc<AtomicU64>,
+    last_rms: Arc<AtomicU64>,
 }
 
 impl Default for AudioRecorder {
@@ -209,14 +268,14 @@ impl AudioRecorder {
         Self {
             stream: None,
             recorded_samples: Arc::new(Mutex::new(Vec::new())),
-            ring_buffer: Arc::new(Mutex::new(None)),
+            ring_buffer_consumer: Arc::new(Mutex::new(None)),
             recorded_capacity: Arc::new(Mutex::new(None)),
-            on_data_callback: Arc::new(Mutex::new(None)),
+            on_data_callback: Arc::new(ArcSwapOption::empty()),
             is_recording: Arc::new(AtomicBool::new(false)),
             sample_rate: DEFAULT_SAMPLE_RATE,
             channels: DEFAULT_CHANNELS,
-            last_peak: Arc::new(Mutex::new(0.0)),
-            last_rms: Arc::new(Mutex::new(0.0)),
+            last_peak: Arc::new(AtomicU64::new(0.0f64.to_bits())),
+            last_rms: Arc::new(AtomicU64::new(0.0f64.to_bits())),
         }
     }
 
@@ -229,24 +288,29 @@ impl AudioRecorder {
             );
         });
 
-        *self
-            .on_data_callback
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(cb);
+        self.on_data_callback.store(Some(Arc::new(cb)));
         Ok(())
     }
 
     #[napi]
     pub fn set_ring_buffer_size(&self, size_samples: u32) -> Result<()> {
+        if self.is_recording.load(Ordering::Acquire) {
+            return Err(Error::new(
+                Status::GenericFailure,
+                "Ring buffer size cannot change while recording is active",
+            ));
+        }
         if size_samples == 0 {
             return Err(Error::new(
                 Status::InvalidArg,
                 "Ring buffer size must be greater than zero",
             ));
         }
-        use ringbuf::HeapRb;
-        let rb = HeapRb::<i16>::new(size_samples as usize);
-        *self.ring_buffer.lock().unwrap_or_else(|e| e.into_inner()) = Some(rb);
+        let (_, consumer) = HeapRb::<i16>::new(size_samples as usize).split();
+        *self
+            .ring_buffer_consumer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(consumer);
         *self
             .recorded_capacity
             .lock()
@@ -337,23 +401,29 @@ impl AudioRecorder {
         self.channels = config.channels();
 
         let recorded_samples = self.recorded_samples.clone();
-        let ring_buffer = self.ring_buffer.clone();
+        let ring_buffer_consumer = self.ring_buffer_consumer.clone();
         let recorded_capacity = self.recorded_capacity.clone();
         let on_data = self.on_data_callback.clone();
         let is_recording = self.is_recording.clone();
         let last_peak = self.last_peak.clone();
         let last_rms = self.last_rms.clone();
 
+        let retention = *recorded_capacity.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ring_producer = retention.map(|capacity| {
+            let (producer, consumer) = HeapRb::<i16>::new(capacity).split();
+            *ring_buffer_consumer
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(consumer);
+            producer
+        });
+
         // Reserve for 10 seconds of audio by default.
         {
             let mut samples = recorded_samples.lock().unwrap_or_else(|e| e.into_inner());
             samples.clear();
-            let reserve_size = recorded_capacity
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .unwrap_or(
-                    (self.sample_rate * self.channels as u32 * DEFAULT_RESERVE_SECONDS) as usize,
-                );
+            let reserve_size = retention.unwrap_or(
+                (self.sample_rate * self.channels as u32 * DEFAULT_RESERVE_SECONDS) as usize,
+            );
             samples.reserve(reserve_size);
         }
 
@@ -374,7 +444,7 @@ impl AudioRecorder {
             }
         }
 
-        let process_samples = move |data: &[i16]| {
+        let mut process_samples = move |data: &[i16]| {
             if is_recording.load(Ordering::SeqCst) {
                 // Calculate stats
                 let mut peak: f32 = 0.0;
@@ -387,55 +457,52 @@ impl AudioRecorder {
                     sum_sq += (val * val) as f64;
                 }
 
-                {
-                    *last_peak.lock().unwrap_or_else(|e| e.into_inner()) = peak as f64;
-                    if !data.is_empty() {
-                        *last_rms.lock().unwrap_or_else(|e| e.into_inner()) =
-                            (sum_sq / data.len() as f64).sqrt();
-                    }
-                }
+                last_peak.store((peak as f64).to_bits(), Ordering::Relaxed);
+                let rms = if data.is_empty() {
+                    0.0
+                } else {
+                    (sum_sq / data.len() as f64).sqrt()
+                };
+                last_rms.store(rms.to_bits(), Ordering::Relaxed);
 
                 // Fill full history
                 {
                     let mut samples = recorded_samples.lock().unwrap_or_else(|e| e.into_inner());
-                    let capacity = *recorded_capacity.lock().unwrap_or_else(|e| e.into_inner());
-                    append_bounded(&mut samples, data, capacity);
+                    append_bounded(&mut samples, data, retention);
                 }
 
                 // Fill ring buffer
-                {
-                    let mut rb_guard = ring_buffer.lock().unwrap_or_else(|e| e.into_inner());
-                    if let Some(rb) = rb_guard.as_mut() {
-                        use ringbuf::traits::RingBuffer;
-                        rb.push_slice_overwrite(data);
-                    }
+                if let Some(producer) = ring_producer.as_mut() {
+                    // A split producer performs a bounded, lock-free chunk
+                    // write. If the consumer falls behind, only the newest
+                    // chunk that fits is retained; the callback never blocks.
+                    let _ = producer.push_slice(data);
                 }
 
                 // Emit callback
-                {
-                    let callback_guard = on_data.lock().unwrap_or_else(|e| e.into_inner());
-                    if let Some(cb) = callback_guard.as_ref() {
-                        cb(data.to_vec());
-                    }
+                if let Some(cb) = on_data.load().as_ref() {
+                    cb(data.to_vec());
                 }
             }
         };
 
         let stream = match config.sample_format() {
-            cpal::SampleFormat::F32 => device.build_input_stream(
-                &stream_config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    let i16_samples: Vec<i16> = data
-                        .iter()
-                        .map(|&sample| {
-                            (sample * I16_MAX_F32).clamp(i16::MIN as f32, i16::MAX as f32) as i16
-                        })
-                        .collect();
-                    process_samples(&i16_samples);
-                },
-                err_fn,
-                None,
-            ),
+            cpal::SampleFormat::F32 => {
+                let mut converted = [0i16; INPUT_CHUNK_SIZE];
+                device.build_input_stream(
+                    &stream_config,
+                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                        process_typed_recording(
+                            data,
+                            &mut converted,
+                            f32_to_i16,
+                            &mut process_samples,
+                        );
+                    },
+                    err_fn,
+                    None,
+                )
+            }
             cpal::SampleFormat::I16 => device.build_input_stream(
                 &stream_config,
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
@@ -444,28 +511,150 @@ impl AudioRecorder {
                 err_fn,
                 None,
             ),
-            cpal::SampleFormat::I8 => device.build_input_stream(
-                &stream_config,
-                move |data: &[i8], _: &cpal::InputCallbackInfo| {
-                    let i16_samples: Vec<i16> =
-                        data.iter().map(|&sample| (sample as i16) << 8).collect();
-                    process_samples(&i16_samples);
-                },
-                err_fn,
-                None,
-            ),
-            cpal::SampleFormat::U16 => device.build_input_stream(
-                &stream_config,
-                move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                    let i16_samples: Vec<i16> = data
-                        .iter()
-                        .map(|&sample| (sample as i32 - I16_MAX_F32 as i32) as i16)
-                        .collect();
-                    process_samples(&i16_samples);
-                },
-                err_fn,
-                None,
-            ),
+            cpal::SampleFormat::I8 => {
+                let mut converted = [0i16; INPUT_CHUNK_SIZE];
+                device.build_input_stream(
+                    &stream_config,
+                    move |data: &[i8], _: &cpal::InputCallbackInfo| {
+                        process_typed_recording(
+                            data,
+                            &mut converted,
+                            i8_to_i16,
+                            &mut process_samples,
+                        );
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::I24 => {
+                let mut converted = [0i16; INPUT_CHUNK_SIZE];
+                device.build_input_stream(
+                    &stream_config,
+                    move |data: &[cpal::I24], _: &cpal::InputCallbackInfo| {
+                        process_typed_recording(
+                            data,
+                            &mut converted,
+                            i24_to_i16,
+                            &mut process_samples,
+                        );
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::I32 => {
+                let mut converted = [0i16; INPUT_CHUNK_SIZE];
+                device.build_input_stream(
+                    &stream_config,
+                    move |data: &[i32], _: &cpal::InputCallbackInfo| {
+                        process_typed_recording(
+                            data,
+                            &mut converted,
+                            i32_to_i16,
+                            &mut process_samples,
+                        );
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::I64 => {
+                let mut converted = [0i16; INPUT_CHUNK_SIZE];
+                device.build_input_stream(
+                    &stream_config,
+                    move |data: &[i64], _: &cpal::InputCallbackInfo| {
+                        process_typed_recording(
+                            data,
+                            &mut converted,
+                            i64_to_i16,
+                            &mut process_samples,
+                        );
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::U8 => {
+                let mut converted = [0i16; INPUT_CHUNK_SIZE];
+                device.build_input_stream(
+                    &stream_config,
+                    move |data: &[u8], _: &cpal::InputCallbackInfo| {
+                        process_typed_recording(
+                            data,
+                            &mut converted,
+                            u8_to_i16,
+                            &mut process_samples,
+                        );
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::U16 => {
+                let mut converted = [0i16; INPUT_CHUNK_SIZE];
+                device.build_input_stream(
+                    &stream_config,
+                    move |data: &[u16], _: &cpal::InputCallbackInfo| {
+                        process_typed_recording(
+                            data,
+                            &mut converted,
+                            u16_to_i16,
+                            &mut process_samples,
+                        );
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::U32 => {
+                let mut converted = [0i16; INPUT_CHUNK_SIZE];
+                device.build_input_stream(
+                    &stream_config,
+                    move |data: &[u32], _: &cpal::InputCallbackInfo| {
+                        process_typed_recording(
+                            data,
+                            &mut converted,
+                            u32_to_i16,
+                            &mut process_samples,
+                        );
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::U64 => {
+                let mut converted = [0i16; INPUT_CHUNK_SIZE];
+                device.build_input_stream(
+                    &stream_config,
+                    move |data: &[u64], _: &cpal::InputCallbackInfo| {
+                        process_typed_recording(
+                            data,
+                            &mut converted,
+                            u64_to_i16,
+                            &mut process_samples,
+                        );
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::F64 => {
+                let mut converted = [0i16; INPUT_CHUNK_SIZE];
+                device.build_input_stream(
+                    &stream_config,
+                    move |data: &[f64], _: &cpal::InputCallbackInfo| {
+                        process_typed_recording(
+                            data,
+                            &mut converted,
+                            f64_to_i16,
+                            &mut process_samples,
+                        );
+                    },
+                    err_fn,
+                    None,
+                )
+            }
             _ => {
                 return Err(Error::new(
                     Status::GenericFailure,
@@ -517,19 +706,28 @@ impl AudioRecorder {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        Ok(SamplesBuffer::create(
-            self.channels as u32,
-            self.sample_rate,
-            samples,
-        ))
+        if self.channels == 0 || self.sample_rate == 0 {
+            return Err(Error::new(
+                Status::GenericFailure,
+                "Recorder has an invalid sample format",
+            ));
+        }
+        let channels = self.channels as usize;
+        let complete_len = samples.len() - samples.len() % channels;
+        let samples = samples[samples.len() - complete_len..].to_vec();
+        SamplesBuffer::create(self.channels as u32, self.sample_rate, samples)
     }
 
     #[napi]
     pub fn get_ring_buffer_samples(&self) -> Result<Vec<i16>> {
-        use ringbuf::traits::Consumer;
-        let mut rb_guard = self.ring_buffer.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(rb) = rb_guard.as_mut() {
-            let samples: Vec<i16> = rb.pop_iter().collect();
+        let rb_guard = self
+            .ring_buffer_consumer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(rb) = rb_guard.as_ref() {
+            // Snapshot semantics: reading recent samples does not advance the
+            // consumer, so repeated reads return the same retained history.
+            let samples: Vec<i16> = rb.iter().copied().collect();
             Ok(samples)
         } else {
             Ok(Vec::new())
@@ -542,6 +740,16 @@ impl AudioRecorder {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
+        if let Some(rb) = self
+            .ring_buffer_consumer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+        {
+            rb.clear();
+        }
+        self.last_peak.store(0.0f64.to_bits(), Ordering::Relaxed);
+        self.last_rms.store(0.0f64.to_bits(), Ordering::Relaxed);
     }
 
     #[napi]
@@ -556,8 +764,56 @@ impl AudioRecorder {
     #[napi]
     pub fn get_levels(&self) -> AudioLevels {
         AudioLevels {
-            peak: *self.last_peak.lock().unwrap_or_else(|e| e.into_inner()),
-            rms: *self.last_rms.lock().unwrap_or_else(|e| e.into_inner()),
+            peak: f64::from_bits(self.last_peak.load(Ordering::Relaxed)),
+            rms: f64::from_bits(self.last_rms.load(Ordering::Relaxed)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ring_buffer_reads_are_snapshots_and_clear_resets_all_retained_state() {
+        let mut recorder = AudioRecorder::new();
+        recorder.set_ring_buffer_size(4).unwrap();
+
+        let (mut producer, consumer) = HeapRb::<i16>::new(4).split();
+        *recorder
+            .ring_buffer_consumer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(consumer);
+        producer.push_slice(&[1, 2, 3, 4]);
+
+        assert_eq!(
+            recorder.get_ring_buffer_samples().unwrap(),
+            vec![1, 2, 3, 4]
+        );
+        assert_eq!(
+            recorder.get_ring_buffer_samples().unwrap(),
+            vec![1, 2, 3, 4]
+        );
+
+        recorder
+            .recorded_samples
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend_from_slice(&[5, 6]);
+        recorder
+            .last_peak
+            .store(0.75f64.to_bits(), Ordering::Relaxed);
+        recorder.last_rms.store(0.5f64.to_bits(), Ordering::Relaxed);
+
+        recorder.clear();
+
+        assert!(recorder
+            .recorded_samples
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty());
+        assert!(recorder.get_ring_buffer_samples().unwrap().is_empty());
+        assert_eq!(recorder.get_levels().peak, 0.0);
+        assert_eq!(recorder.get_levels().rms, 0.0);
     }
 }

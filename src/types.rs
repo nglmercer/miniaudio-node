@@ -116,16 +116,16 @@ pub enum StreamPlayError {
 /// Supported stream configuration
 #[napi(object)]
 pub struct SupportedStreamConfig {
-    pub sample_rate: SampleRate,
-    pub channel_count: ChannelCount,
+    pub sample_rate: u32,
+    pub channel_count: u16,
     pub sample_width: u8,
 }
 
 /// Stream output configuration
 #[napi(object)]
 pub struct StreamOutputConfig {
-    pub sample_rate: Option<SampleRate>,
-    pub channels: Option<ChannelCount>,
+    pub sample_rate: Option<u32>,
+    pub channels: Option<u16>,
     pub buffer_size: Option<u32>,
 }
 

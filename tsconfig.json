@@ -4,7 +4,7 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
-    "skipLibCheck": true,
+    "skipLibCheck": false,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
@@ -20,6 +20,6 @@
     "resolveJsonModule": true,
     "moduleSuffixes": [],
   },
-  "include": ["examples/**/*.ts"],
+  "include": ["examples/**/*.ts", "tests/types/**/*.ts"],
   "exclude": ["node_modules", "dist", "build", "target"],
 }

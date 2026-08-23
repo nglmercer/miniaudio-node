@@ -1,16 +1,18 @@
 //! Real-time Audio Passthrough Module
 //! Provides low-latency audio loopback from input device to output device
 
-use crate::conversions::convert_channels_f32;
 use crate::input::AudioLevels;
+use arc_swap::ArcSwapOption;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
-use ringbuf::HeapRb;
+use ringbuf::traits::{Consumer, Producer, Split};
+use ringbuf::{HeapCons, HeapProd, HeapRb};
 use rodio::cpal;
 use rodio::cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use rodio::cpal::Sample;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 
 /// Callback type for audio level updates
 type OnLevelsCallback = Box<dyn Fn(AudioLevels) + Send + Sync>;
@@ -21,6 +23,7 @@ const DEFAULT_LATENCY_MS: u32 = 20;
 const DEVICE_ID_SEPARATOR: char = ':';
 const I16_MAX_F32: f32 = 32768.0;
 const I8_MAX_F32: f32 = 128.0;
+const IO_CHUNK_SIZE: usize = 4096;
 
 /// Stateful converter used by the passthrough input callback. Input and
 /// output devices are allowed to have different formats; source frames are
@@ -41,19 +44,24 @@ impl PassthroughConverter {
             target_rate,
             source_channels,
             target_channels,
-            source_buffer: Vec::new(),
+            source_buffer: Vec::with_capacity(IO_CHUNK_SIZE * source_channels.max(1) as usize * 2),
             next_source_frame: 0.0,
         }
     }
 
-    fn convert(&mut self, samples: &[f32]) -> Vec<f32> {
+    fn convert_into(
+        &mut self,
+        samples: &[f32],
+        producer: &mut HeapProd<f32>,
+        output_scratch: &mut [f32; IO_CHUNK_SIZE],
+    ) {
         let source_channels = self.source_channels as usize;
         if self.source_rate == 0
             || self.target_rate == 0
             || source_channels == 0
             || self.target_channels == 0
         {
-            return Vec::new();
+            return;
         }
 
         let complete_samples = samples.len() / source_channels * source_channels;
@@ -62,7 +70,8 @@ impl PassthroughConverter {
 
         let source_frames = self.source_buffer.len() / source_channels;
         let source_step = self.source_rate as f64 / self.target_rate as f64;
-        let mut output = Vec::new();
+        let target_channels = self.target_channels as usize;
+        let mut output_len = 0;
 
         // Keep one look-ahead frame for interpolation. It is retained across
         // callbacks so both upsampling and downsampling keep their phase.
@@ -70,19 +79,20 @@ impl PassthroughConverter {
             let source_index = self.next_source_frame.floor() as usize;
             let fraction = (self.next_source_frame - source_index as f64) as f32;
             let next_index = (source_index + 1).min(source_frames - 1);
-            let mut frame = Vec::with_capacity(source_channels);
-            for channel in 0..source_channels {
-                let first = self.source_buffer[source_index * source_channels + channel];
-                let second = self.source_buffer[next_index * source_channels + channel];
-                frame.push(first + (second - first) * fraction);
+            for target_channel in 0..target_channels {
+                output_scratch[output_len] =
+                    self.converted_sample(source_index, next_index, fraction, target_channel);
+                output_len += 1;
+                if output_len == output_scratch.len() {
+                    let _ = producer.push_slice(output_scratch);
+                    output_len = 0;
+                }
             }
-
-            output.extend(convert_channels_f32(
-                &frame,
-                self.source_channels,
-                self.target_channels,
-            ));
             self.next_source_frame += source_step;
+        }
+
+        if output_len > 0 {
+            let _ = producer.push_slice(&output_scratch[..output_len]);
         }
 
         // Discard source frames that can no longer be used as interpolation
@@ -93,8 +103,77 @@ impl PassthroughConverter {
             self.source_buffer.drain(..discard_samples);
             self.next_source_frame -= discard_frames as f64;
         }
+    }
 
-        output
+    fn interpolated_sample(
+        &self,
+        frame_index: usize,
+        next_frame_index: usize,
+        fraction: f32,
+        channel: usize,
+    ) -> f32 {
+        let channels = self.source_channels as usize;
+        let first = self.source_buffer[frame_index * channels + channel];
+        let second = self.source_buffer[next_frame_index * channels + channel];
+        first + (second - first) * fraction
+    }
+
+    fn converted_sample(
+        &self,
+        frame_index: usize,
+        next_frame_index: usize,
+        fraction: f32,
+        target_channel: usize,
+    ) -> f32 {
+        let source_channels = self.source_channels as usize;
+        let target_channels = self.target_channels as usize;
+        if source_channels == target_channels {
+            return self.interpolated_sample(
+                frame_index,
+                next_frame_index,
+                fraction,
+                target_channel,
+            );
+        }
+
+        let source_average = || {
+            (0..source_channels)
+                .map(|channel| {
+                    self.interpolated_sample(frame_index, next_frame_index, fraction, channel)
+                })
+                .sum::<f32>()
+                / source_channels as f32
+        };
+
+        if target_channels == 1 {
+            return source_average();
+        }
+        if source_channels == 1 {
+            return self.interpolated_sample(frame_index, next_frame_index, fraction, 0);
+        }
+        if target_channels < source_channels {
+            let mut sum = 0.0;
+            let mut count = 0usize;
+            for source_channel in (target_channel..source_channels).step_by(target_channels) {
+                sum += self.interpolated_sample(
+                    frame_index,
+                    next_frame_index,
+                    fraction,
+                    source_channel,
+                );
+                count += 1;
+            }
+            return if count == 0 {
+                source_average()
+            } else {
+                sum / count as f32
+            };
+        }
+        if target_channel < source_channels {
+            self.interpolated_sample(frame_index, next_frame_index, fraction, target_channel)
+        } else {
+            source_average()
+        }
     }
 }
 
@@ -107,20 +186,17 @@ pub struct AudioPassthrough {
     input_stream: Option<cpal::Stream>,
     output_stream: Option<cpal::Stream>,
 
-    // Ring buffer for passing audio from input to output
-    ring_buffer: Arc<Mutex<Option<HeapRb<f32>>>>,
-
     // State
     is_running: Arc<AtomicBool>,
     sample_rate: u32,
     channels: u16,
 
     // Audio levels
-    last_peak: Arc<Mutex<f64>>,
-    last_rms: Arc<Mutex<f64>>,
+    last_peak: Arc<AtomicU64>,
+    last_rms: Arc<AtomicU64>,
 
     // Callbacks
-    on_levels_callback: Arc<Mutex<Option<OnLevelsCallback>>>,
+    on_levels_callback: Arc<ArcSwapOption<OnLevelsCallback>>,
 }
 
 impl Default for AudioPassthrough {
@@ -142,13 +218,12 @@ impl AudioPassthrough {
         Self {
             input_stream: None,
             output_stream: None,
-            ring_buffer: Arc::new(Mutex::new(None)),
             is_running: Arc::new(AtomicBool::new(false)),
             sample_rate: DEFAULT_SAMPLE_RATE,
             channels: DEFAULT_CHANNELS,
-            last_peak: Arc::new(Mutex::new(0.0)),
-            last_rms: Arc::new(Mutex::new(0.0)),
-            on_levels_callback: Arc::new(Mutex::new(None)),
+            last_peak: Arc::new(AtomicU64::new(0.0f64.to_bits())),
+            last_rms: Arc::new(AtomicU64::new(0.0f64.to_bits())),
+            on_levels_callback: Arc::new(ArcSwapOption::empty()),
         }
     }
 
@@ -162,10 +237,7 @@ impl AudioPassthrough {
             );
         });
 
-        *self
-            .on_levels_callback
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(cb);
+        self.on_levels_callback.store(Some(Arc::new(cb)));
         Ok(())
     }
 
@@ -238,25 +310,20 @@ impl AudioPassthrough {
             * target_latency as u64
             / 1000) as usize;
         let buffer_size = samples_per_buffer.max(1) * 4;
-        let ring = HeapRb::<f32>::new(buffer_size as usize);
+        let (producer, consumer) = HeapRb::<f32>::new(buffer_size).split();
 
-        {
-            let mut rb_guard = self.ring_buffer.lock().unwrap_or_else(|e| e.into_inner());
-            *rb_guard = Some(ring);
-        }
-
-        // Clone shared data
-        let ring_buffer = self.ring_buffer.clone();
+        // Only the immutable state and callback handles cross into the audio
+        // callbacks. Producer/consumer ownership keeps the SPSC ring lock-free.
         let is_running = self.is_running.clone();
         let last_peak = self.last_peak.clone();
         let last_rms = self.last_rms.clone();
         let on_levels = self.on_levels_callback.clone();
-        let converter = Arc::new(Mutex::new(PassthroughConverter::new(
+        let converter = PassthroughConverter::new(
             input_config.sample_rate().0,
             input_config.channels(),
             output_config.sample_rate().0,
             output_config.channels(),
-        )));
+        );
 
         // Build input stream
         let input_stream_config: cpal::StreamConfig = input_config.clone().into();
@@ -265,84 +332,340 @@ impl AudioPassthrough {
             eprintln!("Input stream error: {}", err);
         };
 
-        // Create input stream
+        // Create input stream. Each callback owns its producer, converter, and
+        // fixed scratch arrays; no shared ring-buffer mutex or temporary Vec is
+        // used on the input path.
         let input_stream = match input_config.sample_format() {
-            cpal::SampleFormat::F32 => input_device.build_input_stream(
-                &input_stream_config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    if is_running.load(Ordering::SeqCst) {
-                        process_input_data(
-                            data,
-                            &ring_buffer,
-                            &last_peak,
-                            &last_rms,
-                            &on_levels,
-                            &converter,
-                        );
-                    }
-                },
-                err_fn,
-                None,
-            ),
-            cpal::SampleFormat::I16 => input_device.build_input_stream(
-                &input_stream_config,
-                move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                    if is_running.load(Ordering::SeqCst) {
-                        let f32_data: Vec<f32> =
-                            data.iter().map(|&s| s as f32 / I16_MAX_F32).collect();
-                        process_input_data(
-                            &f32_data,
-                            &ring_buffer,
-                            &last_peak,
-                            &last_rms,
-                            &on_levels,
-                            &converter,
-                        );
-                    }
-                },
-                err_fn,
-                None,
-            ),
-            cpal::SampleFormat::I8 => input_device.build_input_stream(
-                &input_stream_config,
-                move |data: &[i8], _: &cpal::InputCallbackInfo| {
-                    if is_running.load(Ordering::SeqCst) {
-                        let f32_data: Vec<f32> =
-                            data.iter().map(|&s| (s as f32) / I8_MAX_F32).collect();
-                        process_input_data(
-                            &f32_data,
-                            &ring_buffer,
-                            &last_peak,
-                            &last_rms,
-                            &on_levels,
-                            &converter,
-                        );
-                    }
-                },
-                err_fn,
-                None,
-            ),
-            cpal::SampleFormat::U16 => input_device.build_input_stream(
-                &input_stream_config,
-                move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                    if is_running.load(Ordering::SeqCst) {
-                        let f32_data: Vec<f32> = data
-                            .iter()
-                            .map(|&s| ((s as i32 - I16_MAX_F32 as i32) as f32) / I16_MAX_F32)
-                            .collect();
-                        process_input_data(
-                            &f32_data,
-                            &ring_buffer,
-                            &last_peak,
-                            &last_rms,
-                            &on_levels,
-                            &converter,
-                        );
-                    }
-                },
-                err_fn,
-                None,
-            ),
+            cpal::SampleFormat::F32 => {
+                let mut producer = producer;
+                let mut converter = converter;
+                let mut output_scratch = [0.0; IO_CHUNK_SIZE];
+                let mut input_scratch = [0.0; IO_CHUNK_SIZE];
+                let is_running = is_running.clone();
+                let last_peak = last_peak.clone();
+                let last_rms = last_rms.clone();
+                let on_levels = on_levels.clone();
+                input_device.build_input_stream(
+                    &input_stream_config,
+                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                        if is_running.load(Ordering::Relaxed) {
+                            process_typed_input(
+                                data,
+                                &mut input_scratch,
+                                f32_from_f32,
+                                &mut producer,
+                                &mut converter,
+                                &mut output_scratch,
+                                &last_peak,
+                                &last_rms,
+                                &on_levels,
+                            );
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::I16 => {
+                let mut producer = producer;
+                let mut converter = converter;
+                let mut output_scratch = [0.0; IO_CHUNK_SIZE];
+                let mut input_scratch = [0.0; IO_CHUNK_SIZE];
+                let is_running = is_running.clone();
+                let last_peak = last_peak.clone();
+                let last_rms = last_rms.clone();
+                let on_levels = on_levels.clone();
+                input_device.build_input_stream(
+                    &input_stream_config,
+                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                        if is_running.load(Ordering::Relaxed) {
+                            process_typed_input(
+                                data,
+                                &mut input_scratch,
+                                i16_to_f32,
+                                &mut producer,
+                                &mut converter,
+                                &mut output_scratch,
+                                &last_peak,
+                                &last_rms,
+                                &on_levels,
+                            );
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::I8 => {
+                let mut producer = producer;
+                let mut converter = converter;
+                let mut output_scratch = [0.0; IO_CHUNK_SIZE];
+                let mut input_scratch = [0.0; IO_CHUNK_SIZE];
+                let is_running = is_running.clone();
+                let last_peak = last_peak.clone();
+                let last_rms = last_rms.clone();
+                let on_levels = on_levels.clone();
+                input_device.build_input_stream(
+                    &input_stream_config,
+                    move |data: &[i8], _: &cpal::InputCallbackInfo| {
+                        if is_running.load(Ordering::Relaxed) {
+                            process_typed_input(
+                                data,
+                                &mut input_scratch,
+                                i8_to_f32,
+                                &mut producer,
+                                &mut converter,
+                                &mut output_scratch,
+                                &last_peak,
+                                &last_rms,
+                                &on_levels,
+                            );
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::I24 => {
+                let mut producer = producer;
+                let mut converter = converter;
+                let mut output_scratch = [0.0; IO_CHUNK_SIZE];
+                let mut input_scratch = [0.0; IO_CHUNK_SIZE];
+                let is_running = is_running.clone();
+                let last_peak = last_peak.clone();
+                let last_rms = last_rms.clone();
+                let on_levels = on_levels.clone();
+                input_device.build_input_stream(
+                    &input_stream_config,
+                    move |data: &[cpal::I24], _: &cpal::InputCallbackInfo| {
+                        if is_running.load(Ordering::Relaxed) {
+                            process_typed_input(
+                                data,
+                                &mut input_scratch,
+                                i24_to_f32,
+                                &mut producer,
+                                &mut converter,
+                                &mut output_scratch,
+                                &last_peak,
+                                &last_rms,
+                                &on_levels,
+                            );
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::I32 => {
+                let mut producer = producer;
+                let mut converter = converter;
+                let mut output_scratch = [0.0; IO_CHUNK_SIZE];
+                let mut input_scratch = [0.0; IO_CHUNK_SIZE];
+                let is_running = is_running.clone();
+                let last_peak = last_peak.clone();
+                let last_rms = last_rms.clone();
+                let on_levels = on_levels.clone();
+                input_device.build_input_stream(
+                    &input_stream_config,
+                    move |data: &[i32], _: &cpal::InputCallbackInfo| {
+                        if is_running.load(Ordering::Relaxed) {
+                            process_typed_input(
+                                data,
+                                &mut input_scratch,
+                                i32_to_f32,
+                                &mut producer,
+                                &mut converter,
+                                &mut output_scratch,
+                                &last_peak,
+                                &last_rms,
+                                &on_levels,
+                            );
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::I64 => {
+                let mut producer = producer;
+                let mut converter = converter;
+                let mut output_scratch = [0.0; IO_CHUNK_SIZE];
+                let mut input_scratch = [0.0; IO_CHUNK_SIZE];
+                let is_running = is_running.clone();
+                let last_peak = last_peak.clone();
+                let last_rms = last_rms.clone();
+                let on_levels = on_levels.clone();
+                input_device.build_input_stream(
+                    &input_stream_config,
+                    move |data: &[i64], _: &cpal::InputCallbackInfo| {
+                        if is_running.load(Ordering::Relaxed) {
+                            process_typed_input(
+                                data,
+                                &mut input_scratch,
+                                i64_to_f32,
+                                &mut producer,
+                                &mut converter,
+                                &mut output_scratch,
+                                &last_peak,
+                                &last_rms,
+                                &on_levels,
+                            );
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::U8 => {
+                let mut producer = producer;
+                let mut converter = converter;
+                let mut output_scratch = [0.0; IO_CHUNK_SIZE];
+                let mut input_scratch = [0.0; IO_CHUNK_SIZE];
+                let is_running = is_running.clone();
+                let last_peak = last_peak.clone();
+                let last_rms = last_rms.clone();
+                let on_levels = on_levels.clone();
+                input_device.build_input_stream(
+                    &input_stream_config,
+                    move |data: &[u8], _: &cpal::InputCallbackInfo| {
+                        if is_running.load(Ordering::Relaxed) {
+                            process_typed_input(
+                                data,
+                                &mut input_scratch,
+                                u8_to_f32,
+                                &mut producer,
+                                &mut converter,
+                                &mut output_scratch,
+                                &last_peak,
+                                &last_rms,
+                                &on_levels,
+                            );
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::U16 => {
+                let mut producer = producer;
+                let mut converter = converter;
+                let mut output_scratch = [0.0; IO_CHUNK_SIZE];
+                let mut input_scratch = [0.0; IO_CHUNK_SIZE];
+                let is_running = is_running.clone();
+                let last_peak = last_peak.clone();
+                let last_rms = last_rms.clone();
+                let on_levels = on_levels.clone();
+                input_device.build_input_stream(
+                    &input_stream_config,
+                    move |data: &[u16], _: &cpal::InputCallbackInfo| {
+                        if is_running.load(Ordering::Relaxed) {
+                            process_typed_input(
+                                data,
+                                &mut input_scratch,
+                                u16_to_f32,
+                                &mut producer,
+                                &mut converter,
+                                &mut output_scratch,
+                                &last_peak,
+                                &last_rms,
+                                &on_levels,
+                            );
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::U32 => {
+                let mut producer = producer;
+                let mut converter = converter;
+                let mut output_scratch = [0.0; IO_CHUNK_SIZE];
+                let mut input_scratch = [0.0; IO_CHUNK_SIZE];
+                let is_running = is_running.clone();
+                let last_peak = last_peak.clone();
+                let last_rms = last_rms.clone();
+                let on_levels = on_levels.clone();
+                input_device.build_input_stream(
+                    &input_stream_config,
+                    move |data: &[u32], _: &cpal::InputCallbackInfo| {
+                        if is_running.load(Ordering::Relaxed) {
+                            process_typed_input(
+                                data,
+                                &mut input_scratch,
+                                u32_to_f32,
+                                &mut producer,
+                                &mut converter,
+                                &mut output_scratch,
+                                &last_peak,
+                                &last_rms,
+                                &on_levels,
+                            );
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::U64 => {
+                let mut producer = producer;
+                let mut converter = converter;
+                let mut output_scratch = [0.0; IO_CHUNK_SIZE];
+                let mut input_scratch = [0.0; IO_CHUNK_SIZE];
+                let is_running = is_running.clone();
+                let last_peak = last_peak.clone();
+                let last_rms = last_rms.clone();
+                let on_levels = on_levels.clone();
+                input_device.build_input_stream(
+                    &input_stream_config,
+                    move |data: &[u64], _: &cpal::InputCallbackInfo| {
+                        if is_running.load(Ordering::Relaxed) {
+                            process_typed_input(
+                                data,
+                                &mut input_scratch,
+                                u64_to_f32,
+                                &mut producer,
+                                &mut converter,
+                                &mut output_scratch,
+                                &last_peak,
+                                &last_rms,
+                                &on_levels,
+                            );
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::F64 => {
+                let mut producer = producer;
+                let mut converter = converter;
+                let mut output_scratch = [0.0; IO_CHUNK_SIZE];
+                let mut input_scratch = [0.0; IO_CHUNK_SIZE];
+                let is_running = is_running.clone();
+                let last_peak = last_peak.clone();
+                let last_rms = last_rms.clone();
+                let on_levels = on_levels.clone();
+                input_device.build_input_stream(
+                    &input_stream_config,
+                    move |data: &[f64], _: &cpal::InputCallbackInfo| {
+                        if is_running.load(Ordering::Relaxed) {
+                            process_typed_input(
+                                data,
+                                &mut input_scratch,
+                                f64_to_f32,
+                                &mut producer,
+                                &mut converter,
+                                &mut output_scratch,
+                                &last_peak,
+                                &last_rms,
+                                &on_levels,
+                            );
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+            }
             _ => {
                 return Err(Error::new(
                     Status::GenericFailure,
@@ -364,73 +687,139 @@ impl AudioPassthrough {
         // The callback converts normalized f32 samples to the device scalar
         // type instead of assuming that every output is f32.
         let output_stream_config: cpal::StreamConfig = output_config.clone().into();
-        let ring_buffer_out = self.ring_buffer.clone();
-        let is_running_out = self.is_running.clone();
         let output_stream = match output_config.sample_format() {
-            cpal::SampleFormat::F32 => output_device.build_output_stream(
-                &output_stream_config,
-                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    fill_output_f32(data, &ring_buffer_out, &is_running_out);
-                },
-                |err| eprintln!("Output stream error: {}", err),
-                None,
-            ),
-            cpal::SampleFormat::I16 => output_device.build_output_stream(
-                &output_stream_config,
-                move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                    fill_output_i16(data, &ring_buffer_out, &is_running_out);
-                },
-                |err| eprintln!("Output stream error: {}", err),
-                None,
-            ),
-            cpal::SampleFormat::I8 => output_device.build_output_stream(
-                &output_stream_config,
-                move |data: &mut [i8], _: &cpal::OutputCallbackInfo| {
-                    fill_output_i8(data, &ring_buffer_out, &is_running_out);
-                },
-                |err| eprintln!("Output stream error: {}", err),
-                None,
-            ),
-            cpal::SampleFormat::U8 => output_device.build_output_stream(
-                &output_stream_config,
-                move |data: &mut [u8], _: &cpal::OutputCallbackInfo| {
-                    fill_output_u8(data, &ring_buffer_out, &is_running_out);
-                },
-                |err| eprintln!("Output stream error: {}", err),
-                None,
-            ),
-            cpal::SampleFormat::U16 => output_device.build_output_stream(
-                &output_stream_config,
-                move |data: &mut [u16], _: &cpal::OutputCallbackInfo| {
-                    fill_output_u16(data, &ring_buffer_out, &is_running_out);
-                },
-                |err| eprintln!("Output stream error: {}", err),
-                None,
-            ),
-            cpal::SampleFormat::I32 => output_device.build_output_stream(
-                &output_stream_config,
-                move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
-                    fill_output_i32(data, &ring_buffer_out, &is_running_out);
-                },
-                |err| eprintln!("Output stream error: {}", err),
-                None,
-            ),
-            cpal::SampleFormat::U32 => output_device.build_output_stream(
-                &output_stream_config,
-                move |data: &mut [u32], _: &cpal::OutputCallbackInfo| {
-                    fill_output_u32(data, &ring_buffer_out, &is_running_out);
-                },
-                |err| eprintln!("Output stream error: {}", err),
-                None,
-            ),
-            cpal::SampleFormat::F64 => output_device.build_output_stream(
-                &output_stream_config,
-                move |data: &mut [f64], _: &cpal::OutputCallbackInfo| {
-                    fill_output_f64(data, &ring_buffer_out, &is_running_out);
-                },
-                |err| eprintln!("Output stream error: {}", err),
-                None,
-            ),
+            cpal::SampleFormat::F32 => {
+                let mut consumer = consumer;
+                let mut scratch = [0.0; IO_CHUNK_SIZE];
+                output_device.build_output_stream(
+                    &output_stream_config,
+                    move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                        fill_output(data, &mut consumer, &mut scratch, f32_from_f32);
+                    },
+                    |err| eprintln!("Output stream error: {}", err),
+                    None,
+                )
+            }
+            cpal::SampleFormat::I16 => {
+                let mut consumer = consumer;
+                let mut scratch = [0.0; IO_CHUNK_SIZE];
+                output_device.build_output_stream(
+                    &output_stream_config,
+                    move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
+                        fill_output(data, &mut consumer, &mut scratch, f32_to_i16);
+                    },
+                    |err| eprintln!("Output stream error: {}", err),
+                    None,
+                )
+            }
+            cpal::SampleFormat::I24 => {
+                let mut consumer = consumer;
+                let mut scratch = [0.0; IO_CHUNK_SIZE];
+                output_device.build_output_stream(
+                    &output_stream_config,
+                    move |data: &mut [cpal::I24], _: &cpal::OutputCallbackInfo| {
+                        fill_output(data, &mut consumer, &mut scratch, f32_to_i24);
+                    },
+                    |err| eprintln!("Output stream error: {}", err),
+                    None,
+                )
+            }
+            cpal::SampleFormat::I8 => {
+                let mut consumer = consumer;
+                let mut scratch = [0.0; IO_CHUNK_SIZE];
+                output_device.build_output_stream(
+                    &output_stream_config,
+                    move |data: &mut [i8], _: &cpal::OutputCallbackInfo| {
+                        fill_output(data, &mut consumer, &mut scratch, f32_to_i8);
+                    },
+                    |err| eprintln!("Output stream error: {}", err),
+                    None,
+                )
+            }
+            cpal::SampleFormat::U8 => {
+                let mut consumer = consumer;
+                let mut scratch = [0.0; IO_CHUNK_SIZE];
+                output_device.build_output_stream(
+                    &output_stream_config,
+                    move |data: &mut [u8], _: &cpal::OutputCallbackInfo| {
+                        fill_output(data, &mut consumer, &mut scratch, f32_to_u8);
+                    },
+                    |err| eprintln!("Output stream error: {}", err),
+                    None,
+                )
+            }
+            cpal::SampleFormat::U16 => {
+                let mut consumer = consumer;
+                let mut scratch = [0.0; IO_CHUNK_SIZE];
+                output_device.build_output_stream(
+                    &output_stream_config,
+                    move |data: &mut [u16], _: &cpal::OutputCallbackInfo| {
+                        fill_output(data, &mut consumer, &mut scratch, f32_to_u16);
+                    },
+                    |err| eprintln!("Output stream error: {}", err),
+                    None,
+                )
+            }
+            cpal::SampleFormat::I32 => {
+                let mut consumer = consumer;
+                let mut scratch = [0.0; IO_CHUNK_SIZE];
+                output_device.build_output_stream(
+                    &output_stream_config,
+                    move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
+                        fill_output(data, &mut consumer, &mut scratch, f32_to_i32);
+                    },
+                    |err| eprintln!("Output stream error: {}", err),
+                    None,
+                )
+            }
+            cpal::SampleFormat::I64 => {
+                let mut consumer = consumer;
+                let mut scratch = [0.0; IO_CHUNK_SIZE];
+                output_device.build_output_stream(
+                    &output_stream_config,
+                    move |data: &mut [i64], _: &cpal::OutputCallbackInfo| {
+                        fill_output(data, &mut consumer, &mut scratch, f32_to_i64);
+                    },
+                    |err| eprintln!("Output stream error: {}", err),
+                    None,
+                )
+            }
+            cpal::SampleFormat::U32 => {
+                let mut consumer = consumer;
+                let mut scratch = [0.0; IO_CHUNK_SIZE];
+                output_device.build_output_stream(
+                    &output_stream_config,
+                    move |data: &mut [u32], _: &cpal::OutputCallbackInfo| {
+                        fill_output(data, &mut consumer, &mut scratch, f32_to_u32);
+                    },
+                    |err| eprintln!("Output stream error: {}", err),
+                    None,
+                )
+            }
+            cpal::SampleFormat::U64 => {
+                let mut consumer = consumer;
+                let mut scratch = [0.0; IO_CHUNK_SIZE];
+                output_device.build_output_stream(
+                    &output_stream_config,
+                    move |data: &mut [u64], _: &cpal::OutputCallbackInfo| {
+                        fill_output(data, &mut consumer, &mut scratch, f32_to_u64);
+                    },
+                    |err| eprintln!("Output stream error: {}", err),
+                    None,
+                )
+            }
+            cpal::SampleFormat::F64 => {
+                let mut consumer = consumer;
+                let mut scratch = [0.0; IO_CHUNK_SIZE];
+                output_device.build_output_stream(
+                    &output_stream_config,
+                    move |data: &mut [f64], _: &cpal::OutputCallbackInfo| {
+                        fill_output(data, &mut consumer, &mut scratch, f32_to_f64);
+                    },
+                    |err| eprintln!("Output stream error: {}", err),
+                    None,
+                )
+            }
             unsupported => {
                 return Err(Error::new(
                     Status::GenericFailure,
@@ -480,12 +869,6 @@ impl AudioPassthrough {
         self.input_stream = None;
         self.output_stream = None;
 
-        // Clear ring buffer
-        {
-            let mut rb_guard = self.ring_buffer.lock().unwrap_or_else(|e| e.into_inner());
-            *rb_guard = None;
-        }
-
         Ok(())
     }
 
@@ -499,8 +882,8 @@ impl AudioPassthrough {
     #[napi]
     pub fn get_levels(&self) -> AudioLevels {
         AudioLevels {
-            peak: *self.last_peak.lock().unwrap_or_else(|e| e.into_inner()),
-            rms: *self.last_rms.lock().unwrap_or_else(|e| e.into_inner()),
+            peak: f64::from_bits(self.last_peak.load(Ordering::Relaxed)),
+            rms: f64::from_bits(self.last_rms.load(Ordering::Relaxed)),
         }
     }
 
@@ -526,21 +909,25 @@ impl AudioPassthrough {
     #[napi]
     pub fn get_output_devices() -> Result<Vec<crate::types::AudioDeviceInfo>> {
         let mut result = Vec::new();
-        let host = cpal::default_host();
+        for host_id in cpal::available_hosts() {
+            let host = match cpal::host_from_id(host_id) {
+                Ok(host) => host,
+                Err(_) => continue,
+            };
+            let host_name = format!("{:?}", host_id);
+            let default_device = host.default_output_device();
+            let devices = match host.output_devices() {
+                Ok(devices) => devices,
+                Err(_) => continue,
+            };
 
-        // Get the default output device for comparison
-        let default_device = host.default_output_device();
-
-        if let Ok(devices) = host.output_devices() {
             for (i, device) in devices.enumerate() {
                 if let Ok(name) = device.name() {
-                    // Skip null/discard devices
                     let name_lower = name.to_lowercase();
                     if name_lower.contains("null") || name_lower.contains("discard") {
                         continue;
                     }
 
-                    // Check if this is the default device
                     let is_default = default_device.as_ref().is_some_and(|d| {
                         d.name()
                             .map(|default_name| default_name == name)
@@ -548,9 +935,9 @@ impl AudioPassthrough {
                     });
 
                     result.push(crate::types::AudioDeviceInfo {
-                        id: format!("{:?}:{}", host.id(), i),
+                        id: format!("{}:{}", host_name, i),
                         name,
-                        host: format!("{:?}", host.id()),
+                        host: host_name.clone(),
                         is_default,
                     });
                 }
@@ -662,11 +1049,12 @@ impl AudioPassthrough {
 /// Process input audio data - calculate levels and push to ring buffer
 fn process_input_data(
     data: &[f32],
-    ring_buffer: &Arc<Mutex<Option<HeapRb<f32>>>>,
-    last_peak: &Arc<Mutex<f64>>,
-    last_rms: &Arc<Mutex<f64>>,
-    on_levels: &Arc<Mutex<Option<OnLevelsCallback>>>,
-    converter: &Arc<Mutex<PassthroughConverter>>,
+    producer: &mut HeapProd<f32>,
+    converter: &mut PassthroughConverter,
+    output_scratch: &mut [f32; IO_CHUNK_SIZE],
+    last_peak: &AtomicU64,
+    last_rms: &AtomicU64,
+    on_levels: &Arc<ArcSwapOption<OnLevelsCallback>>,
 ) {
     // Calculate peak and RMS
     let mut peak: f32 = 0.0;
@@ -687,143 +1075,155 @@ fn process_input_data(
     };
 
     // Update last levels
-    {
-        let mut peak_guard = last_peak.lock().unwrap_or_else(|e| e.into_inner());
-        *peak_guard = peak as f64;
-    }
-    {
-        let mut rms_guard = last_rms.lock().unwrap_or_else(|e| e.into_inner());
-        *rms_guard = rms as f64;
-    }
+    last_peak.store((peak as f64).to_bits(), Ordering::Relaxed);
+    last_rms.store((rms as f64).to_bits(), Ordering::Relaxed);
 
     // Emit callback
-    {
-        let callback_guard = on_levels.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(cb) = callback_guard.as_ref() {
-            cb(AudioLevels {
-                peak: peak as f64,
-                rms: rms as f64,
-            });
+    if let Some(cb) = on_levels.load().as_ref() {
+        cb(AudioLevels {
+            peak: peak as f64,
+            rms: rms as f64,
+        });
+    }
+
+    converter.convert_into(data, producer, output_scratch);
+}
+
+// The callback's state is deliberately passed as explicit references so the
+// producer, converter, scratch buffers, and level handles remain owned by the
+// callback thread. This avoids a shared lock on the audio path.
+#[allow(clippy::too_many_arguments)]
+fn process_typed_input<T: Copy>(
+    data: &[T],
+    input_scratch: &mut [f32; IO_CHUNK_SIZE],
+    convert: fn(T) -> f32,
+    producer: &mut HeapProd<f32>,
+    converter: &mut PassthroughConverter,
+    output_scratch: &mut [f32; IO_CHUNK_SIZE],
+    last_peak: &AtomicU64,
+    last_rms: &AtomicU64,
+    on_levels: &Arc<ArcSwapOption<OnLevelsCallback>>,
+) {
+    for chunk in data.chunks(IO_CHUNK_SIZE) {
+        for (index, sample) in chunk.iter().copied().enumerate() {
+            input_scratch[index] = convert(sample);
         }
+        process_input_data(
+            &input_scratch[..chunk.len()],
+            producer,
+            converter,
+            output_scratch,
+            last_peak,
+            last_rms,
+            on_levels,
+        );
     }
+}
 
-    // Push to ring buffer
-    {
-        let converted = converter
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .convert(data);
-        let mut rb_guard = ring_buffer.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(rb) = rb_guard.as_mut() {
-            use ringbuf::traits::RingBuffer;
-            // The passthrough is a live stream: newest samples should replace
-            // the oldest samples if output temporarily falls behind.
-            rb.push_slice_overwrite(&converted);
+fn i16_to_f32(sample: i16) -> f32 {
+    sample as f32 / I16_MAX_F32
+}
+
+fn i8_to_f32(sample: i8) -> f32 {
+    sample as f32 / I8_MAX_F32
+}
+
+fn i24_to_f32(sample: cpal::I24) -> f32 {
+    sample.to_float_sample()
+}
+
+fn i32_to_f32(sample: i32) -> f32 {
+    sample as f32 / 2_147_483_648.0
+}
+
+fn i64_to_f32(sample: i64) -> f32 {
+    (sample as f64 / 9_223_372_036_854_775_808.0) as f32
+}
+
+fn u8_to_f32(sample: u8) -> f32 {
+    (sample as f32 - 128.0) / 128.0
+}
+
+fn u16_to_f32(sample: u16) -> f32 {
+    (sample as f32 - I16_MAX_F32) / I16_MAX_F32
+}
+
+fn u32_to_f32(sample: u32) -> f32 {
+    ((sample as f64 - 2_147_483_648.0) / 2_147_483_648.0) as f32
+}
+
+fn u64_to_f32(sample: u64) -> f32 {
+    ((sample as f64 - 9_223_372_036_854_775_808.0) / 9_223_372_036_854_775_808.0) as f32
+}
+
+fn f64_to_f32(sample: f64) -> f32 {
+    sample as f32
+}
+
+fn f32_from_f32(sample: f32) -> f32 {
+    sample
+}
+
+fn f32_to_i16(sample: f32) -> i16 {
+    (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
+}
+
+fn f32_to_i24(sample: f32) -> cpal::I24 {
+    cpal::I24::from_sample(sample.clamp(-1.0, 1.0))
+}
+
+fn f32_to_i8(sample: f32) -> i8 {
+    (sample.clamp(-1.0, 1.0) * i8::MAX as f32) as i8
+}
+
+fn f32_to_u8(sample: f32) -> u8 {
+    ((sample.clamp(-1.0, 1.0) + 1.0) * 127.5) as u8
+}
+
+fn f32_to_u16(sample: f32) -> u16 {
+    ((sample.clamp(-1.0, 1.0) + 1.0) * 32767.5) as u16
+}
+
+fn f32_to_i32(sample: f32) -> i32 {
+    (sample.clamp(-1.0, 1.0) * i32::MAX as f32) as i32
+}
+
+fn f32_to_i64(sample: f32) -> i64 {
+    (sample.clamp(-1.0, 1.0) as f64 * i64::MAX as f64) as i64
+}
+
+fn f32_to_u32(sample: f32) -> u32 {
+    ((sample.clamp(-1.0, 1.0) + 1.0) * 2_147_483_647.5) as u32
+}
+
+fn f32_to_u64(sample: f32) -> u64 {
+    ((sample.clamp(-1.0, 1.0) as f64 + 1.0) * 9_223_372_036_854_775_807.5) as u64
+}
+
+fn f32_to_f64(sample: f32) -> f64 {
+    sample as f64
+}
+
+fn fill_output<T: Copy>(
+    data: &mut [T],
+    consumer: &mut HeapCons<f32>,
+    scratch: &mut [f32; IO_CHUNK_SIZE],
+    convert: fn(f32) -> T,
+) {
+    let mut offset = 0;
+    while offset < data.len() {
+        let count_requested = (data.len() - offset).min(scratch.len());
+        let count = consumer.pop_slice(&mut scratch[..count_requested]);
+        for (index, sample) in scratch[..count].iter().copied().enumerate() {
+            data[offset + index] = convert(sample);
         }
-    }
-}
-
-fn next_output_sample(
-    ring_buffer: &Arc<Mutex<Option<HeapRb<f32>>>>,
-    is_running: &Arc<AtomicBool>,
-) -> f32 {
-    if !is_running.load(Ordering::SeqCst) {
-        return 0.0;
-    }
-
-    let mut rb_guard = ring_buffer.lock().unwrap_or_else(|e| e.into_inner());
-    rb_guard
-        .as_mut()
-        .and_then(|rb| {
-            use ringbuf::traits::Consumer;
-            rb.try_pop()
-        })
-        .unwrap_or(0.0)
-}
-
-fn fill_output_f32(
-    data: &mut [f32],
-    ring_buffer: &Arc<Mutex<Option<HeapRb<f32>>>>,
-    is_running: &Arc<AtomicBool>,
-) {
-    for sample in data {
-        *sample = next_output_sample(ring_buffer, is_running);
-    }
-}
-
-fn fill_output_i16(
-    data: &mut [i16],
-    ring_buffer: &Arc<Mutex<Option<HeapRb<f32>>>>,
-    is_running: &Arc<AtomicBool>,
-) {
-    for sample in data {
-        *sample =
-            (next_output_sample(ring_buffer, is_running).clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-    }
-}
-
-fn fill_output_i8(
-    data: &mut [i8],
-    ring_buffer: &Arc<Mutex<Option<HeapRb<f32>>>>,
-    is_running: &Arc<AtomicBool>,
-) {
-    for sample in data {
-        *sample =
-            (next_output_sample(ring_buffer, is_running).clamp(-1.0, 1.0) * i8::MAX as f32) as i8;
-    }
-}
-
-fn fill_output_u8(
-    data: &mut [u8],
-    ring_buffer: &Arc<Mutex<Option<HeapRb<f32>>>>,
-    is_running: &Arc<AtomicBool>,
-) {
-    for sample in data {
-        let normalized = next_output_sample(ring_buffer, is_running).clamp(-1.0, 1.0);
-        *sample = ((normalized + 1.0) * 127.5) as u8;
-    }
-}
-
-fn fill_output_u16(
-    data: &mut [u16],
-    ring_buffer: &Arc<Mutex<Option<HeapRb<f32>>>>,
-    is_running: &Arc<AtomicBool>,
-) {
-    for sample in data {
-        let normalized = next_output_sample(ring_buffer, is_running).clamp(-1.0, 1.0);
-        *sample = ((normalized + 1.0) * 32767.5) as u16;
-    }
-}
-
-fn fill_output_i32(
-    data: &mut [i32],
-    ring_buffer: &Arc<Mutex<Option<HeapRb<f32>>>>,
-    is_running: &Arc<AtomicBool>,
-) {
-    for sample in data {
-        *sample =
-            (next_output_sample(ring_buffer, is_running).clamp(-1.0, 1.0) * i32::MAX as f32) as i32;
-    }
-}
-
-fn fill_output_u32(
-    data: &mut [u32],
-    ring_buffer: &Arc<Mutex<Option<HeapRb<f32>>>>,
-    is_running: &Arc<AtomicBool>,
-) {
-    for sample in data {
-        let normalized = next_output_sample(ring_buffer, is_running).clamp(-1.0, 1.0);
-        *sample = ((normalized + 1.0) * 2_147_483_647.5) as u32;
-    }
-}
-
-fn fill_output_f64(
-    data: &mut [f64],
-    ring_buffer: &Arc<Mutex<Option<HeapRb<f32>>>>,
-    is_running: &Arc<AtomicBool>,
-) {
-    for sample in data {
-        *sample = next_output_sample(ring_buffer, is_running) as f64;
+        offset += count;
+        if count < count_requested {
+            for sample in &mut data[offset..] {
+                *sample = convert(0.0);
+            }
+            break;
+        }
     }
 }
 
@@ -851,12 +1251,19 @@ mod tests {
     #[test]
     fn converter_resamples_interleaved_channels_without_cross_talk() {
         let mut converter = PassthroughConverter::new(48_000, 2, 44_100, 2);
-        let output = converter.convert(&[
-            100.0, 1_000.0, // frame 0
-            200.0, 2_000.0, // frame 1
-            300.0, 3_000.0, // frame 2
-            400.0, 4_000.0, // frame 3
-        ]);
+        let (mut producer, mut consumer) = HeapRb::<f32>::new(64).split();
+        let mut scratch = [0.0; IO_CHUNK_SIZE];
+        converter.convert_into(
+            &[
+                100.0, 1_000.0, // frame 0
+                200.0, 2_000.0, // frame 1
+                300.0, 3_000.0, // frame 2
+                400.0, 4_000.0, // frame 3
+            ],
+            &mut producer,
+            &mut scratch,
+        );
+        let output: Vec<f32> = consumer.pop_iter().collect();
 
         assert_eq!(output.len(), 6);
         for frame in output.as_chunks::<2>().0 {
@@ -872,11 +1279,11 @@ mod tests {
     #[test]
     fn converter_keeps_fractional_phase_across_callbacks() {
         let mut converter = PassthroughConverter::new(48_000, 1, 44_100, 1);
-        let first = converter.convert(&[0.0, 1.0]);
-        let second = converter.convert(&[2.0, 3.0, 4.0]);
-
-        let mut output = first;
-        output.extend(second);
+        let (mut producer, mut consumer) = HeapRb::<f32>::new(64).split();
+        let mut scratch = [0.0; IO_CHUNK_SIZE];
+        converter.convert_into(&[0.0, 1.0], &mut producer, &mut scratch);
+        converter.convert_into(&[2.0, 3.0, 4.0], &mut producer, &mut scratch);
+        let output: Vec<f32> = consumer.pop_iter().collect();
         assert!(!output.is_empty());
         assert!(output.windows(2).all(|pair| pair[0] <= pair[1]));
         assert!(output.last().copied().unwrap_or_default() < 4.0);

@@ -603,8 +603,8 @@ export declare const enum StreamError {
 
 /** Stream output configuration */
 export interface StreamOutputConfig {
-  sampleRate?: SampleRate
-  channels?: ChannelCount
+  sampleRate?: number
+  channels?: number
   bufferSize?: number
 }
 
@@ -620,8 +620,8 @@ export declare function supportedOutputConfigs(): Array<SupportedStreamConfig>
 
 /** Supported stream configuration */
 export interface SupportedStreamConfig {
-  sampleRate: SampleRate
-  channelCount: ChannelCount
+  sampleRate: number
+  channelCount: number
   sampleWidth: number
 }
 

@@ -23,6 +23,13 @@ export const PLATFORM: PlatformInfo = {
 }
 
 /**
+ * Set MINIAUDIO_REQUIRE_AUDIO_HARDWARE=1 to turn an unavailable device into a
+ * test failure instead of an allowed skip. CI can use this on a runner that
+ * is explicitly configured with real input/output hardware.
+ */
+export const REQUIRE_AUDIO_HARDWARE = process.env.MINIAUDIO_REQUIRE_AUDIO_HARDWARE === '1'
+
+/**
  * Get platform-specific test audio file paths
  */
 export function getTestAudioFiles(): string[] {
@@ -99,6 +106,9 @@ export function isAudioSystemAvailable(): boolean {
     const formats = getSupportedFormats()
     return Array.isArray(formats) && formats.length > 0
   } catch (error) {
+    if (REQUIRE_AUDIO_HARDWARE) {
+      throw new Error(`Required audio hardware is unavailable: ${String(error)}`)
+    }
     return false
   }
 }

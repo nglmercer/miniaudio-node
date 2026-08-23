@@ -1,5 +1,6 @@
 //! Audio format conversion utilities
 
+use napi::{Error, Result, Status};
 use napi_derive::napi;
 
 /// Convert interleaved samples between channel layouts.
@@ -267,17 +268,28 @@ pub struct SampleTypeConverter {
 #[napi]
 impl SampleTypeConverter {
     #[napi(constructor)]
-    pub fn new(source_bits: u8, target_bits: u8) -> Self {
-        Self {
+    pub fn new(source_bits: u8, target_bits: u8) -> Result<Self> {
+        if !matches!(source_bits, 8 | 16 | 24 | 32) || !matches!(target_bits, 8 | 16 | 24 | 32) {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Sample bit depths must be one of 8, 16, 24, or 32",
+            ));
+        }
+
+        Ok(Self {
             source_bits,
             target_bits,
-        }
+        })
     }
 
     /// Convert between different sample bit depths
     #[napi]
-    pub fn convert(&self, samples: Vec<i32>) -> Vec<i32> {
-        match (self.source_bits, self.target_bits) {
+    pub fn convert(&self, samples: Vec<i32>) -> Result<Vec<i32>> {
+        let converted = match (self.source_bits, self.target_bits) {
+            // Identity conversion is explicit and supported for all valid
+            // representations.
+            (source, target) if source == target => samples,
+
             // 24-bit to 16-bit (truncate and clamp)
             (24, 16) => samples
                 .iter()
@@ -317,6 +329,9 @@ impl SampleTypeConverter {
             // 8-bit to 24-bit (pad and shift)
             (8, 24) => samples.iter().map(|&s| (s - 128) << 16).collect(),
 
+            // 8-bit to 32-bit (pad and shift)
+            (8, 32) => samples.iter().map(|&s| (s - 128) << 24).collect(),
+
             // 24-bit to 8-bit (truncate)
             (24, 8) => samples.iter().map(|&s| (s >> 16) + 128).collect(),
 
@@ -330,9 +345,17 @@ impl SampleTypeConverter {
                 })
                 .collect(),
 
-            // Return samples as-is for other conversions
-            _ => samples,
-        }
+            _ => {
+                return Err(Error::new(
+                    Status::InvalidArg,
+                    format!(
+                        "Unsupported sample conversion: {}-bit to {}-bit",
+                        self.source_bits, self.target_bits
+                    ),
+                ))
+            }
+        };
+        Ok(converted)
     }
 
     #[napi]
@@ -343,5 +366,19 @@ impl SampleTypeConverter {
     #[napi]
     pub fn target_bits(&self) -> u8 {
         self.target_bits
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sample_type_converter_validates_bit_depths_and_supports_identity() {
+        assert!(SampleTypeConverter::new(12, 16).is_err());
+        assert!(SampleTypeConverter::new(16, 20).is_err());
+
+        let converter = SampleTypeConverter::new(16, 16).unwrap();
+        assert_eq!(converter.convert(vec![-123, 456]).unwrap(), vec![-123, 456]);
     }
 }

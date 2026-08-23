@@ -237,6 +237,7 @@ impl AudioStream {
             }
         }
         *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.output_stream.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.is_playing.lock().unwrap_or_else(|e| e.into_inner()) = false;
         *self.is_paused.lock().unwrap_or_else(|e| e.into_inner()) = false;
         Ok(())
@@ -438,5 +439,26 @@ fn make_source_from_vec(
         index: 0,
         sample_rate,
         channels,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stop_releases_stream_handles_even_when_not_playing() {
+        let mut stream = AudioStream::new();
+        stream.stop().unwrap();
+        assert!(stream
+            .output_stream
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_none());
+        assert!(stream
+            .sink
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_none());
     }
 }

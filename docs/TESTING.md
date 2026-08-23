@@ -31,11 +31,16 @@ bun test
 
 The hardware-oriented suites check audio-system availability first. When the host has no usable audio system, those cases are reported as skipped rather than counted as hardware coverage. The always-run `tests/unit/deterministic.test.ts` suite covers loading, validation, decoding, state, and allocation guards without a device, so headless CI still executes meaningful tests.
 
+The deterministic suite also exercises public mixer, recorder-state, buffer-validation, converter-validation, debug-configuration, and looped-decoder error contracts. A green deterministic job is not evidence that a physical input or output device rendered audio.
+
 Run a focused file when iterating:
 
 ```bash
 bun test tests/unit/audio-player.test.ts
 bun test tests/integration/playback.test.ts
+bun run test:hardware
+# On a runner with real devices, make unavailable hardware fail instead of skip:
+MINIAUDIO_REQUIRE_AUDIO_HARDWARE=1 bun run test:hardware
 ```
 
 ### TypeScript
@@ -82,7 +87,7 @@ When adding a hardware-dependent test:
 
 ## CI and release checks
 
-The regular CI matrix builds all six published native targets and runs a Node.js smoke test plus the deterministic suite on host-native artifacts where the runner can execute them. It then runs the hardware-oriented suites, which may skip device cases on headless runners. Cross-compiled Linux arm64 and Windows ia32 artifacts are build-checked but are not executed on incompatible runners.
+The regular CI matrix builds all six published native targets and runs a Node.js smoke test plus the deterministic suite on host-native artifacts where the runner can execute them. The TypeScript declaration check runs against the same package surface. It then runs the hardware-oriented suites, whose output must be read separately because device cases may skip on headless runners. Cross-compiled Linux arm64 and Windows ia32 artifacts are build-checked but are not executed on incompatible runners.
 
 The release workflow first runs format, Clippy, Rust tests, and TypeScript quality gates. It then builds the same six targets and runs Node.js plus deterministic and hardware-oriented Bun tests on the configured host-native release artifacts before packaging them. See [Publishing](PUBLISH.md) for the release sequence and [Platform support](PLATFORM_SUPPORT.md) for the exact matrix.
 

@@ -109,7 +109,7 @@ Check the tag or manual `version` input. It must be an existing `vX.Y.Z` tag (op
 
 ### Native tests fail on a runner
 
-Confirm that the test is running against the artifact created by that matrix entry and that the runner has the required audio runtime. Hardware-dependent tests may be skipped when no audio system is available; deterministic failures must still fail the job. See [Testing](TESTING.md).
+Confirm that the test is running against the artifact created by that matrix entry and that the runner has the required audio runtime. Hardware-dependent tests may be skipped when no audio system is available; deterministic failures must still fail the job. For a self-hosted release runner with real devices, set `MINIAUDIO_REQUIRE_AUDIO_HARDWARE=1` so unavailable input/output paths fail rather than skip. See [Testing](TESTING.md).
 
 ## Related documentation
 

@@ -1,6 +1,5 @@
 //! Audio mixer - blend multiple audio sources together
 
-use crate::conversions::convert_channels_f32;
 use arc_swap::ArcSwap;
 use napi::{Error, Result, Status};
 use napi_derive::napi;
@@ -191,7 +190,9 @@ impl Mixer {
             is_mixing: self.is_mixing.clone(),
             frame_index: 0,
             channel_index: self.channels as usize,
-            current_frame: Vec::new(),
+            // Allocate render scratch storage before the source is handed to
+            // rodio. The iterator never resizes this buffer.
+            current_frame: vec![0.0; self.channels as usize],
         };
         sink.append(source);
         sink.play();
@@ -378,7 +379,7 @@ impl MixerSource {
     }
 }
 
-fn source_frame_at(source: &MixerSource, time_seconds: f64) -> Option<Vec<f32>> {
+fn source_frame_position(source: &MixerSource, time_seconds: f64) -> Option<(usize, usize, f32)> {
     let channels = source.channels as usize;
     if source.sample_rate == 0 || channels == 0 || !time_seconds.is_finite() || time_seconds < 0.0 {
         return None;
@@ -395,13 +396,105 @@ fn source_frame_at(source: &MixerSource, time_seconds: f64) -> Option<Vec<f32>> 
     let index = position.floor() as usize;
     let next_index = (index + 1).min(frame_count - 1);
     let fraction = (position - index as f64) as f32;
+    Some((index, next_index, fraction))
+}
+
+fn interpolated_source_sample(
+    source: &MixerSource,
+    frame_index: usize,
+    next_frame_index: usize,
+    fraction: f32,
+    channel: usize,
+) -> f32 {
+    let channels = source.channels as usize;
+    let first = source.samples[frame_index * channels + channel] as f32 / 32768.0;
+    let second = source.samples[next_frame_index * channels + channel] as f32 / 32768.0;
+    first + (second - first) * fraction
+}
+
+fn source_frame_at(source: &MixerSource, time_seconds: f64) -> Option<Vec<f32>> {
+    let (frame_index, next_frame_index, fraction) = source_frame_position(source, time_seconds)?;
+    let channels = source.channels as usize;
     let mut frame = Vec::with_capacity(channels);
     for channel in 0..channels {
-        let first = source.samples[index * channels + channel] as f32 / 32768.0;
-        let second = source.samples[next_index * channels + channel] as f32 / 32768.0;
-        frame.push(first + (second - first) * fraction);
+        frame.push(interpolated_source_sample(
+            source,
+            frame_index,
+            next_frame_index,
+            fraction,
+            channel,
+        ));
     }
     Some(frame)
+}
+
+/// Read one converted target-channel sample without creating an intermediate
+/// source frame or channel-conversion vector. The realtime iterator uses this
+/// to write directly into its preallocated frame buffer.
+fn converted_source_sample(
+    source: &MixerSource,
+    frame_index: usize,
+    next_frame_index: usize,
+    fraction: f32,
+    target_channel: usize,
+    target_channels: usize,
+) -> f32 {
+    let source_channels = source.channels as usize;
+    if source_channels == target_channels {
+        return interpolated_source_sample(
+            source,
+            frame_index,
+            next_frame_index,
+            fraction,
+            target_channel,
+        );
+    }
+
+    let source_average = || {
+        (0..source_channels)
+            .map(|channel| {
+                interpolated_source_sample(source, frame_index, next_frame_index, fraction, channel)
+            })
+            .sum::<f32>()
+            / source_channels as f32
+    };
+
+    if target_channels == 1 {
+        return source_average();
+    }
+    if source_channels == 1 {
+        return interpolated_source_sample(source, frame_index, next_frame_index, fraction, 0);
+    }
+    if target_channels < source_channels {
+        let mut sum = 0.0;
+        let mut count = 0usize;
+        for source_channel in (target_channel..source_channels).step_by(target_channels) {
+            sum += interpolated_source_sample(
+                source,
+                frame_index,
+                next_frame_index,
+                fraction,
+                source_channel,
+            );
+            count += 1;
+        }
+        return if count == 0 {
+            source_average()
+        } else {
+            sum / count as f32
+        };
+    }
+    if target_channel < source_channels {
+        interpolated_source_sample(
+            source,
+            frame_index,
+            next_frame_index,
+            fraction,
+            target_channel,
+        )
+    } else {
+        source_average()
+    }
 }
 
 fn mix_frame(
@@ -417,34 +510,7 @@ fn mix_frame(
     }
 
     let mut mixed = vec![0.0f32; target_channels];
-    for source in sources {
-        if !source.enabled.load(Ordering::Relaxed) {
-            continue;
-        }
-        let Some(frame) = source_frame_at(source, time_seconds) else {
-            continue;
-        };
-        let converted = convert_channels_f32(&frame, source.channels, channels);
-        let volume = load_float(&source.volume);
-        let pan = load_float(&source.pan);
-        for (channel, mixed_sample) in mixed.iter_mut().enumerate() {
-            let mut gain = volume;
-            if target_channels == 2 {
-                gain *= if channel == 0 {
-                    if pan > 0.0 {
-                        1.0 - pan
-                    } else {
-                        1.0
-                    }
-                } else if pan < 0.0 {
-                    1.0 + pan
-                } else {
-                    1.0
-                };
-            }
-            *mixed_sample += converted.get(channel).copied().unwrap_or(0.0) * gain;
-        }
-    }
+    mix_frame_f32_into(sources, 1.0, channels, time_seconds, &mut mixed);
 
     mixed
         .into_iter()
@@ -476,11 +542,12 @@ impl Iterator for MixerOutput {
         }
         if self.channel_index >= self.channels as usize {
             let sources = self.sources.load();
-            self.current_frame = mix_frame_f32(
+            mix_frame_f32_into(
                 sources.as_ref(),
                 load_float(&self.volume),
                 self.channels,
                 self.frame_index as f64 / self.sample_rate.max(1) as f64,
+                &mut self.current_frame,
             );
             self.frame_index = self.frame_index.saturating_add(1);
             self.channel_index = 0;
@@ -514,25 +581,30 @@ impl Source for MixerOutput {
     }
 }
 
-fn mix_frame_f32(
+fn mix_frame_f32_into(
     sources: &[MixerSource],
     master_volume: f32,
     channels: u16,
     time_seconds: f64,
-) -> Vec<f32> {
+    mixed: &mut [f32],
+) {
     let target_channels = channels as usize;
-    let mut mixed = vec![0.0f32; target_channels];
+    if target_channels == 0 || mixed.len() < target_channels {
+        return;
+    }
+    mixed[..target_channels].fill(0.0);
     for source in sources {
         if !source.enabled.load(Ordering::Relaxed) {
             continue;
         }
-        let Some(frame) = source_frame_at(source, time_seconds) else {
+        let Some((frame_index, next_frame_index, fraction)) =
+            source_frame_position(source, time_seconds)
+        else {
             continue;
         };
-        let converted = convert_channels_f32(&frame, source.channels, channels);
         let volume = load_float(&source.volume);
         let pan = load_float(&source.pan);
-        for (channel, mixed_sample) in mixed.iter_mut().enumerate() {
+        for (channel, mixed_sample) in mixed.iter_mut().enumerate().take(target_channels) {
             let mut gain = volume;
             if target_channels == 2 {
                 gain *= if channel == 0 {
@@ -547,13 +619,19 @@ fn mix_frame_f32(
                     1.0
                 };
             }
-            *mixed_sample += converted.get(channel).copied().unwrap_or(0.0) * gain;
+            *mixed_sample += converted_source_sample(
+                source,
+                frame_index,
+                next_frame_index,
+                fraction,
+                channel,
+                target_channels,
+            ) * gain;
         }
     }
-    mixed
-        .into_iter()
-        .map(|sample| (sample * master_volume).clamp(-1.0, 1.0))
-        .collect()
+    for sample in &mut mixed[..target_channels] {
+        *sample = (*sample * master_volume).clamp(-1.0, 1.0);
+    }
 }
 
 fn load_float(value: &AtomicU32) -> f32 {
@@ -564,4 +642,33 @@ fn load_float(value: &AtomicU32) -> f32 {
 #[napi]
 pub fn mixer(max_sources: Option<u32>) -> Mixer {
     Mixer::with_config(44100, 2, max_sources.unwrap_or(16))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn realtime_iterator_reuses_preallocated_frame_storage() {
+        let source = MixerSource::new("source".to_string(), vec![1_000, -1_000], 44_100, 2);
+        let sources = Arc::new(ArcSwap::from_pointee(vec![source]));
+        let is_mixing = Arc::new(AtomicBool::new(true));
+        let mut output = MixerOutput {
+            sources,
+            volume: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            sample_rate: 44_100,
+            channels: 2,
+            is_mixing,
+            frame_index: 0,
+            channel_index: 2,
+            current_frame: vec![0.0; 2],
+        };
+        let frame_pointer = output.current_frame.as_ptr();
+
+        for _ in 0..1_000 {
+            assert!(output.next().is_some());
+            assert_eq!(output.current_frame.as_ptr(), frame_pointer);
+            assert_eq!(output.current_frame.capacity(), 2);
+        }
+    }
 }
