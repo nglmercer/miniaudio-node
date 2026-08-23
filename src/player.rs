@@ -62,6 +62,34 @@ impl PlaybackClock {
     }
 }
 
+struct PlaybackStartPlan {
+    starts_new_track: bool,
+    starts_clock: bool,
+    replace_queued_sink: bool,
+    source_position: f64,
+}
+
+fn playback_start_plan(
+    current_state: &PlaybackState,
+    position_before_play: f64,
+    sink_is_empty: bool,
+) -> PlaybackStartPlan {
+    let starts_new_track = *current_state == PlaybackState::Stopped
+        || (*current_state == PlaybackState::Loaded && position_before_play <= f64::EPSILON)
+        || (*current_state == PlaybackState::Playing && sink_is_empty);
+
+    PlaybackStartPlan {
+        starts_new_track,
+        starts_clock: *current_state != PlaybackState::Playing || starts_new_track,
+        replace_queued_sink: starts_new_track && !sink_is_empty,
+        source_position: if *current_state == PlaybackState::Loaded && !starts_new_track {
+            position_before_play
+        } else {
+            0.0
+        },
+    }
+}
+
 /// Thread-safe audio player with rodio backend
 #[napi]
 pub struct AudioPlayer {
@@ -300,8 +328,8 @@ impl AudioPlayer {
             self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
         );
 
-        // Start a new clock only for a fresh playback or a resume. Calling
-        // play() while already playing is intentionally idempotent.
+        // Plan a fresh playback or resume. Calling play() while already
+        // playing is intentionally idempotent.
         let current_state = self.reconcile_state();
         let position_before_play = self
             .clock
@@ -315,20 +343,7 @@ impl AudioPlayer {
             .as_ref()
             .map(|sink| sink.empty())
             .unwrap_or(true);
-        let starts_new_track = current_state == PlaybackState::Stopped
-            || (current_state == PlaybackState::Loaded && position_before_play <= f64::EPSILON)
-            || (current_state == PlaybackState::Playing && sink_is_empty);
-        if current_state != PlaybackState::Playing || starts_new_track {
-            self.clock
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .start(Instant::now(), starts_new_track);
-        }
-        let source_position = if current_state == PlaybackState::Loaded && !starts_new_track {
-            position_before_play
-        } else {
-            0.0
-        };
+        let start_plan = playback_start_plan(&current_state, position_before_play, sink_is_empty);
 
         // Always ensure sink is available - recreate if needed
         let sink_needs_source = {
@@ -336,8 +351,17 @@ impl AudioPlayer {
                 self.output_stream.lock().unwrap_or_else(|e| e.into_inner());
             let mut sink_guard = self.sink.lock().unwrap_or_else(|e| e.into_inner());
 
-            // Create new stream and sink if either is missing
-            if sink_guard.is_none() || output_stream_guard.is_none() {
+            // A clock-forced EOF can leave Rodio's physical queue non-empty.
+            // Every logical new-track start must replace that queue so replay
+            // begins from the source's first sample instead of resuming it.
+            if start_plan.replace_queued_sink {
+                if let Some(sink) = sink_guard.as_ref() {
+                    sink.stop();
+                }
+                *sink_guard = None;
+            }
+
+            if output_stream_guard.is_none() {
                 debug_log!("Recreating output stream and sink...");
 
                 let stream = OutputStreamBuilder::open_default_stream().map_err(|e| {
@@ -354,6 +378,17 @@ impl AudioPlayer {
                 *sink_guard = Some(sink);
                 debug_log!("Output stream and sink recreated");
                 true // New sink needs a source
+            } else if sink_guard.is_none() {
+                let stream = output_stream_guard.as_ref().ok_or_else(|| {
+                    Error::new(
+                        Status::GenericFailure,
+                        "Output stream disappeared while recreating the sink",
+                    )
+                })?;
+                let sink = Sink::connect_new(stream.mixer());
+                *sink_guard = Some(sink);
+                debug_log!("Sink recreated on the existing output stream");
+                true
             } else {
                 // Sink exists, check if it needs a source
                 sink_guard.as_ref().map(|s| s.empty()).unwrap_or(true)
@@ -386,8 +421,12 @@ impl AudioPlayer {
                     } else {
                         44100
                     };
-                    let skip_samples =
-                        buffer_skip_samples(sample_rate, channels, source_position, samples.len());
+                    let skip_samples = buffer_skip_samples(
+                        sample_rate,
+                        channels,
+                        start_plan.source_position,
+                        samples.len(),
+                    );
                     let source = rodio::buffer::SamplesBuffer::new(
                         channels,
                         sample_rate,
@@ -408,15 +447,24 @@ impl AudioPlayer {
                             format!("Failed to decode file '{}': {}", file_path, e),
                         )
                     })?;
-                    sink.append(
-                        source.skip_duration(std::time::Duration::from_secs_f64(source_position)),
-                    );
+                    sink.append(source.skip_duration(std::time::Duration::from_secs_f64(
+                        start_plan.source_position,
+                    )));
                 }
             } else {
                 debug_log!("Resuming paused audio");
             }
             sink.play();
             debug_log!("Sink playing");
+        }
+
+        // Start timing only after all backend setup and source preparation has
+        // completed and playback has actually been issued to the sink.
+        if start_plan.starts_clock {
+            self.clock
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .start(Instant::now(), start_plan.starts_new_track);
         }
 
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackState::Playing;
@@ -765,7 +813,8 @@ pub fn quick_play(file_path: String, config: Option<AudioPlayerConfig>) -> Resul
 
 #[cfg(test)]
 mod playback_clock_tests {
-    use super::PlaybackClock;
+    use super::{playback_start_plan, PlaybackClock};
+    use crate::types::PlaybackState;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -796,6 +845,16 @@ mod playback_clock_tests {
         clock.start(base, true);
         assert!(!clock.reached_end(base + Duration::from_millis(79), 0.08));
         assert!(clock.reached_end(base + Duration::from_millis(81), 0.08));
+    }
+
+    #[test]
+    fn stopped_replay_replaces_a_nonempty_sink_and_starts_from_zero() {
+        let plan = playback_start_plan(&PlaybackState::Stopped, 0.08, false);
+
+        assert!(plan.starts_new_track);
+        assert!(plan.starts_clock);
+        assert!(plan.replace_queued_sink);
+        assert_eq!(plan.source_position, 0.0);
     }
 }
 

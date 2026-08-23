@@ -60,7 +60,6 @@ impl AtomicRollingSamples {
             return;
         }
 
-        let reset = self.clear_requested.swap(false, Ordering::AcqRel);
         let data = if data.len() > capacity {
             &data[data.len() - capacity..]
         } else {
@@ -68,8 +67,11 @@ impl AtomicRollingSamples {
         };
 
         // This is a single-writer sequence lock. The callback never waits for
-        // readers; readers retry if a write overlaps their snapshot.
+        // readers; readers retry if a write overlaps their snapshot. Enter the
+        // sequence before consuming a pending clear so no reader can observe
+        // the old indices after the clear flag has returned to false.
         self.sequence.fetch_add(1, Ordering::AcqRel);
+        let reset = self.clear_requested.swap(false, Ordering::AcqRel);
         let mut write_index = if reset {
             0
         } else {
@@ -1041,6 +1043,46 @@ mod tests {
 
         writer.join().unwrap();
         reader.join().unwrap();
+    }
+
+    #[test]
+    fn rolling_history_clear_never_reveals_pre_clear_samples_during_write() {
+        const ROUNDS: usize = 10_000;
+
+        let history = Arc::new(AtomicRollingSamples::new(4));
+        let phase = Arc::new(AtomicUsize::new(0));
+        let writer_history = history.clone();
+        let writer_phase = phase.clone();
+        let writer = thread::spawn(move || {
+            for round in 0..ROUNDS {
+                let start_phase = round * 2 + 1;
+                while writer_phase.load(Ordering::Acquire) != start_phase {
+                    thread::yield_now();
+                }
+                writer_history.push_slice(&[1, 1, 1, 1]);
+                writer_phase.store(start_phase + 1, Ordering::Release);
+            }
+        });
+
+        for round in 0..ROUNDS {
+            let ready_phase = round * 2;
+            while phase.load(Ordering::Acquire) != ready_phase {
+                thread::yield_now();
+            }
+
+            history.push_slice(&[-1, -1, -1, -1]);
+            history.clear();
+            phase.store(ready_phase + 1, Ordering::Release);
+
+            let snapshot = history.snapshot();
+            assert!(snapshot.is_empty() || snapshot.as_slice() == [1, 1, 1, 1]);
+
+            while phase.load(Ordering::Acquire) != ready_phase + 2 {
+                thread::yield_now();
+            }
+        }
+
+        writer.join().unwrap();
     }
 
     #[test]

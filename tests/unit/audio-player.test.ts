@@ -515,6 +515,11 @@ describe("AudioPlayer", () => {
         await Bun.sleep(180);
         expect(eofPlayer.isPlaying()).toBe(false);
         expect(eofPlayer.getState()).toBe(PlaybackState.Stopped);
+
+        eofPlayer.play();
+        expect(eofPlayer.isPlaying()).toBe(true);
+        expect(eofPlayer.getState()).toBe(PlaybackState.Playing);
+        expect(eofPlayer.getCurrentTime()).toBeLessThan(0.04);
       } finally {
         eofPlayer.stop();
       }

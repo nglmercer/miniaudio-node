@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Moved `AudioRecorder.setOnData()` chunk ownership and N-API delivery to a preallocated SPSC worker queue so the audio callback no longer allocates a `Vec` for each callback.
 - Bounded the downstream N-API callback queue and intentionally drop callback chunks on JavaScript backpressure instead of allowing unbounded native queue growth.
 - Preserve only the newest configured samples when switching a large unbounded recording to rolling history, without cloning the entire recording.
+- Included pending recorder clears inside the rolling-history sequence transition so concurrent snapshots cannot expose pre-clear samples.
+- Start playback timing only after the sink is running and replace stale queued sources when replaying after clock-detected EOF.
 
 ## [1.6.2] - 2026-08-22 🔒 Correctness & Release Hardening
 
