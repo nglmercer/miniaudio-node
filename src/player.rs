@@ -113,26 +113,11 @@ impl Drop for AudioPlayer {
 impl AudioPlayer {
     #[napi(constructor)]
     pub fn new() -> Result<Self> {
-        let player = Self::default();
-
-        // Try to initialize the output stream and sink immediately
-        // This prevents the first-play delay
-        match OutputStreamBuilder::open_default_stream() {
-            Ok(stream) => {
-                let sink = Sink::connect_new(stream.mixer());
-                *player
-                    .output_stream
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) = Some(stream);
-                *player.sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(sink);
-                debug_log!("Audio stream initialized in constructor");
-            }
-            Err(e) => {
-                debug_log!("Failed to open default audio output in constructor: {}", e);
-            }
-        }
-
-        Ok(player)
+        // Open the backend lazily on the first play() call. Constructing a
+        // player must remain safe in headless environments, where probing a
+        // PulseAudio/CoreAudio device can block or fail before the caller has
+        // requested playback.
+        Ok(Self::default())
     }
 
     #[napi]
@@ -480,10 +465,11 @@ impl AudioPlayer {
     pub fn stop(&mut self) -> Result<()> {
         debug_log!("Stop called");
 
-        // Only error if player was never initialized
-        if !self.initialized {
+        // Preserve the public error for an unused player, but still release
+        // any eagerly-created backend resources so Drop can shut down cleanly.
+        let was_initialized = self.initialized;
+        if !was_initialized {
             debug_log!("Cannot stop - player not initialized");
-            return Err(Error::new(Status::InvalidArg, "Player not initialized"));
         }
 
         // Reset time tracking.
@@ -494,12 +480,20 @@ impl AudioPlayer {
             sink.stop();
         }
         *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        // Drop the output stream together with its sink. Keeping the stream
+        // alive after stop() leaves the backend worker running in headless
+        // environments and can prevent test/process shutdown.
+        *self.output_stream.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.audio_samples.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.buffer_sample_rate = 0;
         self.buffer_channels = 0;
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackState::Stopped;
         self.current_file = None;
         debug_log!("State set to Stopped");
+
+        if !was_initialized {
+            return Err(Error::new(Status::InvalidArg, "Player not initialized"));
+        }
         Ok(())
     }
 

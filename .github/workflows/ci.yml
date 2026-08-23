@@ -14,10 +14,13 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   RUST_TOOLCHAIN: stable
   NODE_VERSION: "20.17.0"
-  MACOSX_DEPLOYMENT_TARGET: "10.15"
+  BUN_VERSION: "1.4.0"
 
 jobs:
   build-test:
@@ -29,65 +32,73 @@ jobs:
       matrix:
         include:
           # --- Windows ---
-          - os: windows-latest
+          - os: windows-2022
             target: x86_64-pc-windows-msvc
             artifact: miniaudio_node.win32-x64-msvc.node
             run_tests: true
 
-          - os: windows-latest
+          - os: windows-2022
             target: i686-pc-windows-msvc
             artifact: miniaudio_node.win32-ia32-msvc.node
             run_tests: false
 
           # --- macOS ---
           # 1. Intel (x64) Build
-          # FIX: Use macos-15-intel to maintain x86_64 architecture support.
-          # macos-13 is deprecated. macos-15-intel is supported until Aug 2027.
-          - os: macos-15-intel # <--- CHANGED FROM macos-13
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             artifact: miniaudio_node.darwin-x64.node
+            macos_deployment_target: "10.15"
             run_tests: true
 
           # 2. Apple Silicon (ARM64) Build
-          # Use macos-14 or 15 (Apple Silicon runner).
           - os: macos-15
             target: aarch64-apple-darwin
             artifact: miniaudio_node.darwin-arm64.node
+            # arm64 macOS binaries require macOS 11 or newer.
+            macos_deployment_target: "11.0"
             run_tests: true
 
           # --- Linux ---
           # 1. x64 Linux
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             artifact: miniaudio_node.linux-x64-gnu.node
             run_tests: true
 
           # 2. ARM64 Linux (IMPLEMENTED)
           # We cannot run tests here because the runner is x64, and the binary is ARM64.
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: aarch64-unknown-linux-gnu
             artifact: miniaudio_node.linux-arm64-gnu.node
             run_tests: false
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: latest
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
+
+      - name: Configure macOS build
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "MACOSX_DEPLOYMENT_TARGET=${{ matrix.macos_deployment_target }}" >> "$GITHUB_ENV"
+          echo "Building ${{ matrix.target }} for macOS ${{ matrix.macos_deployment_target }}+"
 
       # --- Linux Dependencies (x64) ---
       - name: Install system dependencies (Linux x64)
@@ -136,13 +147,13 @@ jobs:
           echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
 
       - name: Configure Git (Windows)
-        if: matrix.os == 'windows-latest'
+        if: runner.os == 'Windows'
         run: |
           git config --global core.autocrlf input
           git config --global core.eol lf
 
       - name: Cache Rust dependencies
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -153,13 +164,28 @@ jobs:
             ${{ matrix.os }}-${{ matrix.target }}-cargo-
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun ci
 
       - name: Build native module
         shell: bash
         run: |
+          set -euo pipefail
           echo "Building for target: ${{ matrix.target }}"
           bunx napi build --platform --release --target ${{ matrix.target }}
+
+      - name: Normalize native module artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          native_file=$(find . -maxdepth 1 -type f -name '*.node' -print -quit)
+          if [[ -z "$native_file" ]]; then
+            echo "No native .node file was produced for ${{ matrix.target }}"
+            exit 1
+          fi
+          if [[ "$native_file" != "./${{ matrix.artifact }}" ]]; then
+            mv "$native_file" "${{ matrix.artifact }}"
+          fi
+          test -s "${{ matrix.artifact }}"
 
       - name: Run Node.js tests
         if: matrix.run_tests
@@ -180,14 +206,14 @@ jobs:
       - name: Prepare artifact for upload
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist/
-          if [ -f "${{ matrix.artifact }}" ]; then
-            cp "${{ matrix.artifact }}" "dist/${{ matrix.artifact }}"
-          fi
+          cp "${{ matrix.artifact }}" "dist/${{ matrix.artifact }}"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.artifact }}
+          if-no-files-found: error
           retention-days: 7

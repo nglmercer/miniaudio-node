@@ -1,4 +1,5 @@
 use crate::types::{AudioMetadata, DEBUG_ENABLED};
+use cpal::traits::{DeviceTrait, HostTrait};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
 use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
@@ -10,13 +11,31 @@ use std::time::Duration;
 
 #[napi]
 pub fn initialize_audio() -> Result<String> {
-    match OutputStreamBuilder::open_default_stream() {
-        Ok(_stream) => Ok("Audio system initialized with rodio".to_string()),
-        Err(e) => Err(Error::new(
+    // Device discovery is enough to validate availability. Opening a rodio
+    // stream here makes this otherwise lightweight API block indefinitely on
+    // headless PulseAudio/CoreAudio hosts; playback opens the stream lazily.
+    let host = cpal::default_host();
+    let host_name = format!("{:?}", host.id());
+    let output_device = host.default_output_device().ok_or_else(|| {
+        Error::new(
             Status::GenericFailure,
-            format!("Failed to initialize audio: {}", e),
-        )),
-    }
+            format!("No default audio output device found for {}", host_name),
+        )
+    })?;
+    output_device.default_output_config().map_err(|e| {
+        Error::new(
+            Status::GenericFailure,
+            format!(
+                "Default audio output is unavailable for {}: {}",
+                host_name, e
+            ),
+        )
+    })?;
+
+    Ok(format!(
+        "Audio system initialized with rodio ({})",
+        host_name
+    ))
 }
 
 /// Enable or disable debug logging (defaults to false)

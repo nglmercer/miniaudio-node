@@ -32,7 +32,7 @@
     "build:watch": "napi build --watch",
     "test": "bun test",
     "tsc": "tsc",
-    "lint": "cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings",
+    "lint": "cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings",
     "format": "cargo fmt --all",
     "clean": "napi clean && cargo clean",
     "copy:artifacts": "bun ./scripts/copy-artifacts.js",

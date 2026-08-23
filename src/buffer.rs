@@ -66,8 +66,10 @@ impl SamplesBuffer {
     #[napi(factory)]
     pub fn from_bytes(bytes: Vec<u8>, channels: u32, sample_rate: u32) -> Self {
         let samples: Vec<i16> = bytes
-            .chunks_exact(2)
-            .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|chunk| i16::from_le_bytes(*chunk))
             .collect();
         Self::new(channels as u16, sample_rate, samples)
     }

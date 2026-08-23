@@ -858,7 +858,7 @@ mod tests {
         ]);
 
         assert_eq!(output.len(), 6);
-        for frame in output.chunks_exact(2) {
+        for frame in output.as_chunks::<2>().0 {
             assert!(frame[0] < 500.0);
             assert!(frame[1] > 500.0);
         }

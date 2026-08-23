@@ -132,7 +132,9 @@ mod tests {
 
         assert_eq!(converted.len(), 6);
         assert!(converted
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .all(|frame| frame[1] - frame[0] >= 9_000));
     }
 
