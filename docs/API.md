@@ -64,7 +64,7 @@ const recentSamples = recorder.getRingBufferSamples();
 recorder.stop();
 ```
 
-`setRingBufferSize()` bounds the retained history in samples; when it overflows, the history keeps the newest samples. `getRingBufferSamples()` returns a non-destructive snapshot, so repeated reads do not consume the retained samples. `getBuffer()` returns the same bounded time window as a `SamplesBuffer`; `clear()` empties both retained stores and resets peak/RMS levels. `setOnData()` receives incoming sample chunks asynchronously through a bounded non-blocking queue; under sustained JavaScript backpressure, queued callback chunks may be dropped rather than blocking capture. `getLevels()` reports peak and RMS levels.
+`setRingBufferSize()` bounds the retained history in samples; when it overflows, the history keeps the newest samples. `getRingBufferSamples()` returns a non-destructive snapshot, so repeated reads do not consume the retained samples. `getBuffer()` returns the same bounded time window as a `SamplesBuffer`; `clear()` empties both retained stores and resets peak/RMS levels. `setOnData()` receives incoming sample chunks asynchronously through bounded non-blocking native and N-API queues; under sustained JavaScript backpressure, queued callback chunks may be dropped rather than blocking capture. For realtime-safe retention, call `setRingBufferSize()` before `start()`; without it, the recorder keeps an unbounded history and grows it through a mutex-protected vector on the capture callback. `getLevels()` reports peak and RMS levels.
 
 Pass a device ID returned by `getInputDevices()` to `start(deviceId)`. Malformed or unknown IDs are rejected; they never fall back to the first input device.
 

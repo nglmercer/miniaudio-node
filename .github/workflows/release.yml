@@ -19,6 +19,7 @@ env:
   RUST_TOOLCHAIN: stable
   NODE_VERSION: "20.17.0"
   BUN_VERSION: "1.4.0"
+  CANONICAL_REPOSITORY: nglmercer/miniaudio-node
 
 jobs:
   quality:
@@ -37,7 +38,7 @@ jobs:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
         run: |
           set -euo pipefail
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "Invalid release tag: $RELEASE_TAG"
             exit 1
           fi
@@ -287,9 +288,7 @@ jobs:
     needs: build-release
     permissions:
       actions: read
-      contents: write
-      packages: write
-      id-token: write
+      contents: read
     runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
 
@@ -310,12 +309,21 @@ jobs:
           else
             TAG_NAME="$GITHUB_REF_NAME"
           fi
-          if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+          if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "Invalid release tag: $TAG_NAME"
             exit 1
           fi
+          if [[ "$TAG_NAME" == *-* ]]; then
+            IS_PRERELEASE=true
+            NPM_TAG=next
+          else
+            IS_PRERELEASE=false
+            NPM_TAG=latest
+          fi
           echo "TAG_NAME=$TAG_NAME" >> "$GITHUB_ENV"
           echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -367,25 +375,35 @@ jobs:
             exit 1
           fi
 
+      - name: Verify canonical release credentials
+        env:
+          CANONICAL_RELEASE_TOKEN: ${{ secrets.CANONICAL_RELEASE_TOKEN }}
+        run: |
+          if [ -z "$CANONICAL_RELEASE_TOKEN" ]; then
+            echo "::error::CANONICAL_RELEASE_TOKEN is required to publish the GitHub Release to $CANONICAL_REPOSITORY."
+            exit 1
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           files: package/*.node
           tag_name: ${{ env.TAG_NAME }}
           name: Release ${{ env.TAG_NAME }}
+          repository: ${{ env.CANONICAL_REPOSITORY }}
+          token: ${{ secrets.CANONICAL_RELEASE_TOKEN }}
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.tag_info.outputs.is_prerelease == 'true' }}
           generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish to NPM
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TAG: ${{ steps.tag_info.outputs.npm_tag }}
         run: |
           if [ -z "$NODE_AUTH_TOKEN" ]; then
             echo "::warning::NPM_TOKEN secret is not set; skipping npm publish."
             exit 0
           fi
           cd package
-          npm publish --access public
+          npm publish --access public --tag "$NPM_TAG"

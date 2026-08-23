@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reworked bounded recorder history to use lock-free atomic writes and non-destructive snapshots, so public history reads no longer block the CPAL input callback.
 - Removed the unused full-history allocation from bounded recorder mode and release old unbounded storage when switching to a rolling history.
 - Moved `AudioRecorder.setOnData()` chunk ownership and N-API delivery to a preallocated SPSC worker queue so the audio callback no longer allocates a `Vec` for each callback.
+- Bounded the downstream N-API callback queue and intentionally drop callback chunks on JavaScript backpressure instead of allowing unbounded native queue growth.
+- Preserve only the newest configured samples when switching a large unbounded recording to rolling history, without cloning the entire recording.
 
 ## [1.6.2] - 2026-08-22 🔒 Correctness & Release Hardening
 

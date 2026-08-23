@@ -1,6 +1,7 @@
 use crate::buffer::SamplesBuffer;
 use crate::types::AudioDeviceInfo;
 use arc_swap::ArcSwapOption;
+use napi::bindgen_prelude::Unknown;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
@@ -22,6 +23,7 @@ const DEVICE_ID_SEPARATOR: char = ':';
 const I16_MAX_F32: f32 = 32768.0;
 const INPUT_CHUNK_SIZE: usize = 4096;
 const ON_DATA_QUEUE_CAPACITY: usize = 8;
+const ON_DATA_NAPI_QUEUE_CAPACITY: usize = 8;
 #[cfg(target_os = "linux")]
 const PREFERRED_LINUX_BUFFER_SIZE: u32 = 1024;
 
@@ -445,12 +447,29 @@ impl AudioRecorder {
     }
 
     #[napi]
-    pub fn set_on_data(&self, callback: ThreadsafeFunction<Vec<i16>>) -> Result<()> {
+    pub fn set_on_data(
+        &self,
+        callback: ThreadsafeFunction<
+            Vec<i16>,
+            Unknown<'static>,
+            Vec<i16>,
+            Status,
+            true,
+            false,
+            ON_DATA_NAPI_QUEUE_CAPACITY,
+        >,
+    ) -> Result<()> {
         let cb = Box::new(move |data: Vec<i16>| {
-            callback.call(
+            // Keep the N-API queue bounded as well as the CPAL-to-worker queue.
+            // QueueFull is an intentional drop under JavaScript backpressure;
+            // neither queue is allowed to make the capture path wait.
+            match callback.call(
                 Ok::<_, Error>(data),
                 ThreadsafeFunctionCallMode::NonBlocking,
-            );
+            ) {
+                Status::Ok | Status::QueueFull | Status::Closing => {}
+                _ => {}
+            }
         });
 
         self.on_data_callback.store(Some(Arc::new(cb)));
@@ -476,16 +495,31 @@ impl AudioRecorder {
             .recorded_capacity
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(capacity);
-        let existing = self.snapshot_history();
         let rolling = Arc::new(AtomicRollingSamples::new(capacity));
-        rolling.push_slice(&existing);
+
+        if let Some(existing) = self.rolling_history.load_full() {
+            // A previous bounded history is already limited to its configured
+            // capacity, so this snapshot is bounded by construction.
+            let existing = existing.snapshot();
+            rolling.push_slice(&existing);
+            *self
+                .recorded_samples
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Vec::new();
+        } else {
+            // When switching from unbounded mode, copy only the newest tail
+            // while holding the control-thread lock. Avoid cloning the whole
+            // recording just to retain a smaller bounded history.
+            let mut samples = self
+                .recorded_samples
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let start = samples.len().saturating_sub(capacity);
+            rolling.push_slice(&samples[start..]);
+            *samples = Vec::new();
+        }
+
         self.rolling_history.store(Some(rolling));
-        // Release any old unbounded allocation instead of retaining it behind
-        // a merely cleared Vec.
-        *self
-            .recorded_samples
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Vec::new();
         Ok(())
     }
 
@@ -1002,6 +1036,34 @@ mod tests {
 
         writer.join().unwrap();
         reader.join().unwrap();
+    }
+
+    #[test]
+    fn switching_from_unbounded_history_keeps_only_the_newest_tail() {
+        let recorder = AudioRecorder::new();
+        {
+            let mut samples = recorder
+                .recorded_samples
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            *samples = vec![1, 2, 3, 4, 5, 6];
+            assert!(samples.capacity() >= 6);
+        }
+
+        recorder.set_ring_buffer_size(4).unwrap();
+
+        assert_eq!(
+            recorder.get_ring_buffer_samples().unwrap(),
+            vec![3, 4, 5, 6]
+        );
+        assert_eq!(
+            recorder
+                .recorded_samples
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .capacity(),
+            0
+        );
     }
 
     #[test]

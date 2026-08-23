@@ -83,7 +83,7 @@ export declare class AudioPlayer {
 
 export declare class AudioRecorder {
   constructor()
-  setOnData(callback: ((err: Error | null, arg: Array<number>) => any)): void
+  setOnData(callback: ((err: Error | null, arg: Array<number>) => unknown)): void
   setRingBufferSize(sizeSamples: number): void
   start(deviceId?: string | undefined | null): void
   stop(): void

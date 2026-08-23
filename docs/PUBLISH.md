@@ -44,7 +44,7 @@ git tag v1.6.3
 git push origin v1.6.3
 ```
 
-A tag matching `v<major>.<minor>.<patch>` starts the release workflow. Pre-release suffixes such as `-beta.1` are also accepted by the workflow's tag validation.
+A tag matching `v<major>.<minor>.<patch>` starts the release workflow. Pre-release suffixes such as `-beta.1` are also accepted. Stable tags are published to npm with the `latest` dist-tag; pre-release tags are marked as GitHub prereleases and published with npm's `next` dist-tag.
 
 ## Run a manual release
 
@@ -60,10 +60,10 @@ The input must be a valid `v`-prefixed semantic version and the tag must already
 
 The release job uses:
 
-- `GITHUB_TOKEN` to create the GitHub release;
+- `CANONICAL_RELEASE_TOKEN` to create the GitHub release in `nglmercer/miniaudio-node`. This must be a narrowly scoped fine-grained PAT or GitHub App token with contents write access to that repository; the workflow may execute in the `hernan-lc/miniaudio-node` Actions mirror, so its default `GITHUB_TOKEN` is not used for the canonical release;
 - `NPM_TOKEN` to publish to npm when npm publication is enabled.
 
-If `NPM_TOKEN` is absent, the workflow creates the GitHub release and emits a warning while skipping npm publication. Set the secret in the repository or organization settings before a release that must publish to npm.
+If `NPM_TOKEN` is absent, the workflow creates the GitHub release and emits a warning while skipping npm publication. Both secrets should be configured in the repository or organization settings before a release that must publish the GitHub release and npm package.
 
 ## Package contents
 
