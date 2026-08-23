@@ -78,6 +78,27 @@ describe("hardware audio paths", () => {
     expect(recorder.isRecording()).toBe(false);
   });
 
+  inputIt("delivers recorder data callbacks without blocking capture", async () => {
+    const recorder = new AudioRecorder();
+    let callbackCount = 0;
+    let sampleCount = 0;
+    recorder.setOnData((_error, data) => {
+      callbackCount += 1;
+      sampleCount += data.length;
+    });
+
+    try {
+      recorder.start(inputDeviceId);
+      await Bun.sleep(120);
+    } finally {
+      recorder.stop();
+    }
+
+    await Bun.sleep(20);
+    expect(callbackCount).toBeGreaterThan(0);
+    expect(sampleCount).toBeGreaterThan(0);
+  });
+
   inputIt("opens and closes the native passthrough path", async () => {
     const passthrough = new AudioPassthrough();
     try {

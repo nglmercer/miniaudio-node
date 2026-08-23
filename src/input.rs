@@ -4,11 +4,15 @@ use arc_swap::ArcSwapOption;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
+use ringbuf::traits::{Consumer, Producer, Split};
+use ringbuf::{HeapCons, HeapRb};
 use rodio::cpal;
 use rodio::cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use rodio::cpal::Sample;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI16, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 type OnDataCallback = Box<dyn Fn(Vec<i16>) + Send + Sync>;
 
 const DEFAULT_SAMPLE_RATE: u32 = 44100;
@@ -17,94 +21,165 @@ const DEFAULT_RESERVE_SECONDS: u32 = 10;
 const DEVICE_ID_SEPARATOR: char = ':';
 const I16_MAX_F32: f32 = 32768.0;
 const INPUT_CHUNK_SIZE: usize = 4096;
+const ON_DATA_QUEUE_CAPACITY: usize = 8;
 #[cfg(target_os = "linux")]
 const PREFERRED_LINUX_BUFFER_SIZE: u32 = 1024;
 
-/// A fixed-capacity chronological history for samples arriving from the audio
-/// callback. Unlike an ordinary SPSC queue, writes overwrite the oldest
-/// samples once the history is full.
-struct RollingSamples {
-    buffer: Vec<i16>,
-    write_index: usize,
-    len: usize,
+/// A fixed-capacity history whose audio writer and public snapshot readers do
+/// not share a blocking mutex. Each sample is atomic so a reader can safely
+/// retry a snapshot while the CPAL callback is writing newer samples.
+struct AtomicRollingSamples {
+    buffer: Box<[AtomicI16]>,
+    write_index: AtomicUsize,
+    len: AtomicUsize,
+    sequence: AtomicUsize,
+    clear_requested: AtomicBool,
 }
 
-impl RollingSamples {
+impl AtomicRollingSamples {
     fn new(capacity: usize) -> Self {
         Self {
-            buffer: vec![0; capacity],
-            write_index: 0,
-            len: 0,
+            buffer: (0..capacity)
+                .map(|_| AtomicI16::new(0))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            write_index: AtomicUsize::new(0),
+            len: AtomicUsize::new(0),
+            sequence: AtomicUsize::new(0),
+            clear_requested: AtomicBool::new(false),
         }
     }
 
     /// Append samples without allocating. If the input is larger than the
     /// history, only its newest capacity-sized suffix is written.
-    fn push_slice(&mut self, data: &[i16]) {
+    fn push_slice(&self, data: &[i16]) {
         let capacity = self.buffer.len();
         if capacity == 0 {
             return;
         }
 
+        let reset = self.clear_requested.swap(false, Ordering::AcqRel);
         let data = if data.len() > capacity {
             &data[data.len() - capacity..]
         } else {
             data
         };
 
+        // This is a single-writer sequence lock. The callback never waits for
+        // readers; readers retry if a write overlaps their snapshot.
+        self.sequence.fetch_add(1, Ordering::AcqRel);
+        let mut write_index = if reset {
+            0
+        } else {
+            self.write_index.load(Ordering::Relaxed)
+        };
+        let mut len = if reset {
+            0
+        } else {
+            self.len.load(Ordering::Relaxed)
+        };
         for &sample in data {
-            self.buffer[self.write_index] = sample;
-            self.write_index += 1;
-            if self.write_index == capacity {
-                self.write_index = 0;
+            self.buffer[write_index].store(sample, Ordering::Relaxed);
+            write_index += 1;
+            if write_index == capacity {
+                write_index = 0;
             }
-            self.len = (self.len + 1).min(capacity);
+            len = (len + 1).min(capacity);
         }
+        self.write_index.store(write_index, Ordering::Relaxed);
+        self.len.store(len, Ordering::Relaxed);
+        self.sequence.fetch_add(1, Ordering::Release);
     }
 
     /// Reconstruct the retained samples from oldest to newest. This allocates
-    /// only for the caller’s snapshot, never for audio callback writes.
+    /// only for the caller’s snapshot, never for audio callback writes. The
+    /// bounded retry loop is on the caller’s thread, never on the audio path.
     fn snapshot(&self) -> Vec<i16> {
-        if self.len == 0 {
+        let capacity = self.buffer.len();
+        if capacity == 0 {
             return Vec::new();
         }
 
-        let capacity = self.buffer.len();
-        let oldest = (self.write_index + capacity - self.len) % capacity;
-        let first_len = self.len.min(capacity - oldest);
-        let mut snapshot = Vec::with_capacity(self.len);
-        snapshot.extend_from_slice(&self.buffer[oldest..oldest + first_len]);
-        if first_len < self.len {
-            snapshot.extend_from_slice(&self.buffer[..self.len - first_len]);
+        let mut retries = 0;
+        loop {
+            let before = self.sequence.load(Ordering::Acquire);
+            if before & 1 != 0 {
+                retries += 1;
+                if retries % 16 == 0 {
+                    thread::yield_now();
+                }
+                continue;
+            }
+            if self.clear_requested.load(Ordering::Acquire) {
+                return Vec::new();
+            }
+
+            let write_index = self.write_index.load(Ordering::Relaxed);
+            let len = self.len.load(Ordering::Relaxed);
+            let oldest = (write_index + capacity - len) % capacity;
+            let first_len = len.min(capacity - oldest);
+            let mut snapshot = Vec::with_capacity(len);
+            for offset in 0..first_len {
+                snapshot.push(self.buffer[oldest + offset].load(Ordering::Relaxed));
+            }
+            for offset in first_len..len {
+                snapshot.push(self.buffer[offset - first_len].load(Ordering::Relaxed));
+            }
+
+            let after = self.sequence.load(Ordering::Acquire);
+            if before == after && after & 1 == 0 && !self.clear_requested.load(Ordering::Acquire) {
+                return snapshot;
+            }
+            retries += 1;
+            if retries % 16 == 0 {
+                thread::yield_now();
+            }
         }
-        snapshot
     }
 
-    fn clear(&mut self) {
-        self.write_index = 0;
-        self.len = 0;
+    fn clear(&self) {
+        // The next writer folds this reset into its own sequence-locked write;
+        // snapshots hide the retained values immediately.
+        self.clear_requested.store(true, Ordering::Release);
     }
 }
 
-#[derive(Default)]
-struct RecorderHistory {
-    samples: Vec<i16>,
-    rolling: Option<RollingSamples>,
+struct AudioChunk {
+    len: usize,
+    samples: [i16; INPUT_CHUNK_SIZE],
 }
 
-impl RecorderHistory {
-    fn push_slice(&mut self, data: &[i16]) {
-        if let Some(rolling) = self.rolling.as_mut() {
-            rolling.push_slice(data);
-        } else {
-            self.samples.extend_from_slice(data);
-        }
+impl AudioChunk {
+    fn from_slice(data: &[i16]) -> Self {
+        debug_assert!(data.len() <= INPUT_CHUNK_SIZE);
+        let len = data.len().min(INPUT_CHUNK_SIZE);
+        let mut samples = [0; INPUT_CHUNK_SIZE];
+        samples[..len].copy_from_slice(&data[..len]);
+        Self { len, samples }
     }
 
-    fn snapshot(&self) -> Vec<i16> {
-        self.rolling
-            .as_ref()
-            .map_or_else(|| self.samples.clone(), RollingSamples::snapshot)
+    fn into_vec(self) -> Vec<i16> {
+        self.samples[..self.len].to_vec()
+    }
+}
+
+fn run_on_data_worker(
+    mut consumer: HeapCons<AudioChunk>,
+    on_data: Arc<ArcSwapOption<OnDataCallback>>,
+    stop: Arc<AtomicBool>,
+) {
+    loop {
+        if let Some(chunk) = consumer.try_pop() {
+            if let Some(callback) = on_data.load().as_ref() {
+                callback(chunk.into_vec());
+            }
+            continue;
+        }
+
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
     }
 }
 
@@ -119,6 +194,12 @@ fn process_typed_recording<T: Copy, F: FnMut(&[i16])>(
             scratch[index] = convert(sample);
         }
         process(&scratch[..chunk.len()]);
+    }
+}
+
+fn process_i16_recording<F: FnMut(&[i16])>(data: &[i16], process: &mut F) {
+    for chunk in data.chunks(INPUT_CHUNK_SIZE) {
+        process(chunk);
     }
 }
 
@@ -295,12 +376,15 @@ pub fn get_input_devices() -> Result<Vec<AudioDeviceInfo>> {
 #[napi]
 pub struct AudioRecorder {
     stream: Option<cpal::Stream>,
-    // The Vec backs unbounded getBuffer() history; rolling is the fixed-
-    // capacity, overwrite-on-overflow history used by both public snapshots.
-    // The active store is updated while holding this one existing history lock.
-    recorded_history: Arc<Mutex<RecorderHistory>>,
+    // Unbounded mode retains its existing control-thread history. Bounded
+    // mode uses rolling_history, which is lock-free for the audio writer and
+    // snapshot readers.
+    recorded_samples: Arc<Mutex<Vec<i16>>>,
+    rolling_history: Arc<ArcSwapOption<AtomicRollingSamples>>,
     recorded_capacity: Arc<Mutex<Option<usize>>>,
     on_data_callback: Arc<ArcSwapOption<OnDataCallback>>,
+    on_data_worker: Option<JoinHandle<()>>,
+    on_data_stop: Arc<AtomicBool>,
     is_recording: Arc<AtomicBool>,
     sample_rate: u32,
     channels: u16,
@@ -320,15 +404,38 @@ impl Drop for AudioRecorder {
     }
 }
 
+impl AudioRecorder {
+    fn stop_on_data_worker(&mut self) {
+        self.on_data_stop.store(true, Ordering::Release);
+        if let Some(worker) = self.on_data_worker.take() {
+            let _ = worker.join();
+        }
+    }
+
+    fn snapshot_history(&self) -> Vec<i16> {
+        if let Some(rolling) = self.rolling_history.load_full() {
+            rolling.snapshot()
+        } else {
+            self.recorded_samples
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+        }
+    }
+}
+
 #[napi]
 impl AudioRecorder {
     #[napi(constructor)]
     pub fn new() -> Self {
         Self {
             stream: None,
-            recorded_history: Arc::new(Mutex::new(RecorderHistory::default())),
+            recorded_samples: Arc::new(Mutex::new(Vec::new())),
+            rolling_history: Arc::new(ArcSwapOption::empty()),
             recorded_capacity: Arc::new(Mutex::new(None)),
             on_data_callback: Arc::new(ArcSwapOption::empty()),
+            on_data_worker: None,
+            on_data_stop: Arc::new(AtomicBool::new(true)),
             is_recording: Arc::new(AtomicBool::new(false)),
             sample_rate: DEFAULT_SAMPLE_RATE,
             channels: DEFAULT_CHANNELS,
@@ -369,15 +476,16 @@ impl AudioRecorder {
             .recorded_capacity
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(capacity);
-        let mut history = self
-            .recorded_history
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let existing = history.snapshot();
-        let mut rolling = RollingSamples::new(capacity);
+        let existing = self.snapshot_history();
+        let rolling = Arc::new(AtomicRollingSamples::new(capacity));
         rolling.push_slice(&existing);
-        history.samples.clear();
-        history.rolling = Some(rolling);
+        self.rolling_history.store(Some(rolling));
+        // Release any old unbounded allocation instead of retaining it behind
+        // a merely cleared Vec.
+        *self
+            .recorded_samples
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Vec::new();
         Ok(())
     }
 
@@ -454,7 +562,8 @@ impl AudioRecorder {
         self.sample_rate = config.sample_rate().0;
         self.channels = config.channels();
 
-        let recorded_history = self.recorded_history.clone();
+        let recorded_samples = self.recorded_samples.clone();
+        let rolling_history = self.rolling_history.clone();
         let recorded_capacity = self.recorded_capacity.clone();
         let on_data = self.on_data_callback.clone();
         let is_recording = self.is_recording.clone();
@@ -463,16 +572,30 @@ impl AudioRecorder {
 
         let retention = *recorded_capacity.lock().unwrap_or_else(|e| e.into_inner());
 
-        // Reserve for 10 seconds of audio by default.
+        // Allocate only the active history store. Bounded mode already owns
+        // its fixed rolling storage; reserving an equally large Vec here would
+        // double its memory footprint for no benefit.
         {
-            let mut history = recorded_history.lock().unwrap_or_else(|e| e.into_inner());
-            history.samples.clear();
-            history.rolling = retention.map(RollingSamples::new);
-            let reserve_size = retention.unwrap_or(
-                (self.sample_rate * self.channels as u32 * DEFAULT_RESERVE_SECONDS) as usize,
-            );
-            history.samples.reserve(reserve_size);
+            let mut samples = recorded_samples.lock().unwrap_or_else(|e| e.into_inner());
+            *samples = Vec::new();
+            if let Some(capacity) = retention {
+                rolling_history.store(Some(Arc::new(AtomicRollingSamples::new(capacity))));
+            } else {
+                rolling_history.store(None);
+                let reserve_size =
+                    (self.sample_rate * self.channels as u32 * DEFAULT_RESERVE_SECONDS) as usize;
+                samples.reserve(reserve_size);
+            }
         }
+
+        let (mut on_data_producer, on_data_consumer) =
+            HeapRb::<AudioChunk>::new(ON_DATA_QUEUE_CAPACITY).split();
+        self.on_data_stop.store(false, Ordering::Release);
+        self.on_data_worker = Some(thread::spawn({
+            let on_data = on_data.clone();
+            let stop = self.on_data_stop.clone();
+            move || run_on_data_worker(on_data_consumer, on_data, stop)
+        }));
 
         let err_fn = move |err| {
             eprintln!("Audio stream error: {}", err);
@@ -512,15 +635,22 @@ impl AudioRecorder {
                 };
                 last_rms.store(rms.to_bits(), Ordering::Relaxed);
 
-                // Fill full history
-                {
-                    let mut history = recorded_history.lock().unwrap_or_else(|e| e.into_inner());
+                // Fill history. Bounded mode is lock-free for this callback;
+                // only unbounded mode uses the control-thread Vec mutex.
+                let rolling = rolling_history.load();
+                if let Some(history) = rolling.as_ref() {
                     history.push_slice(data);
+                } else {
+                    recorded_samples
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .extend_from_slice(data);
                 }
 
-                // Emit callback
-                if let Some(cb) = on_data.load().as_ref() {
-                    cb(data.to_vec());
+                // Queue a fixed-size, preallocated chunk. Conversion to an
+                // owned Vec for N-API happens on the worker thread.
+                if on_data.load().is_some() {
+                    let _ = on_data_producer.try_push(AudioChunk::from_slice(data));
                 }
             }
         };
@@ -545,7 +675,7 @@ impl AudioRecorder {
             cpal::SampleFormat::I16 => device.build_input_stream(
                 &stream_config,
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                    process_samples(data);
+                    process_i16_recording(data, &mut process_samples);
                 },
                 err_fn,
                 None,
@@ -695,10 +825,11 @@ impl AudioRecorder {
                 )
             }
             _ => {
+                self.stop_on_data_worker();
                 return Err(Error::new(
                     Status::GenericFailure,
                     format!("Unsupported sample format: {:?}", config.sample_format()),
-                ))
+                ));
             }
         }
         .map_err(|e| {
@@ -706,14 +837,22 @@ impl AudioRecorder {
                 Status::GenericFailure,
                 format!("Failed to build input stream: {}", e),
             )
-        })?;
+        });
+        let stream = match stream {
+            Ok(stream) => stream,
+            Err(error) => {
+                self.stop_on_data_worker();
+                return Err(error);
+            }
+        };
 
-        stream.play().map_err(|e| {
-            Error::new(
+        if let Err(error) = stream.play() {
+            self.stop_on_data_worker();
+            return Err(Error::new(
                 Status::GenericFailure,
-                format!("Failed to start input stream: {}", e),
-            )
-        })?;
+                format!("Failed to start input stream: {}", error),
+            ));
+        }
 
         self.stream = Some(stream);
         self.is_recording.store(true, Ordering::SeqCst);
@@ -723,12 +862,9 @@ impl AudioRecorder {
 
     #[napi]
     pub fn stop(&mut self) -> Result<()> {
-        if !self.is_recording.load(Ordering::SeqCst) {
-            return Ok(());
-        }
-
         self.is_recording.store(false, Ordering::SeqCst);
         self.stream = None;
+        self.stop_on_data_worker();
 
         Ok(())
     }
@@ -740,11 +876,7 @@ impl AudioRecorder {
 
     #[napi]
     pub fn get_buffer(&self) -> Result<SamplesBuffer> {
-        let samples = self
-            .recorded_history
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .snapshot();
+        let samples = self.snapshot_history();
         if self.channels == 0 || self.sample_rate == 0 {
             return Err(Error::new(
                 Status::GenericFailure,
@@ -759,25 +891,21 @@ impl AudioRecorder {
 
     #[napi]
     pub fn get_ring_buffer_samples(&self) -> Result<Vec<i16>> {
-        let history = self
-            .recorded_history
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        Ok(history
-            .rolling
-            .as_ref()
-            .map_or_else(Vec::new, RollingSamples::snapshot))
+        Ok(self
+            .rolling_history
+            .load_full()
+            .map_or_else(Vec::new, |history| history.snapshot()))
     }
 
     #[napi]
     pub fn clear(&mut self) {
-        let mut history = self
-            .recorded_history
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        history.samples.clear();
-        if let Some(rolling) = history.rolling.as_mut() {
+        if let Some(rolling) = self.rolling_history.load_full() {
             rolling.clear();
+        } else {
+            self.recorded_samples
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
         }
         self.last_peak.store(0.0f64.to_bits(), Ordering::Relaxed);
         self.last_rms.store(0.0f64.to_bits(), Ordering::Relaxed);
@@ -807,21 +935,21 @@ mod tests {
 
     #[test]
     fn rolling_history_keeps_samples_under_capacity() {
-        let mut history = RollingSamples::new(4);
+        let history = AtomicRollingSamples::new(4);
         history.push_slice(&[1, 2]);
         assert_eq!(history.snapshot(), vec![1, 2]);
     }
 
     #[test]
     fn rolling_history_keeps_samples_at_exact_capacity() {
-        let mut history = RollingSamples::new(4);
+        let history = AtomicRollingSamples::new(4);
         history.push_slice(&[1, 2, 3, 4]);
         assert_eq!(history.snapshot(), vec![1, 2, 3, 4]);
     }
 
     #[test]
     fn rolling_history_overflow_keeps_the_newest_samples() {
-        let mut history = RollingSamples::new(4);
+        let history = AtomicRollingSamples::new(4);
         history.push_slice(&[1, 2, 3, 4]);
         history.push_slice(&[5, 6]);
         assert_eq!(history.snapshot(), vec![3, 4, 5, 6]);
@@ -829,14 +957,14 @@ mod tests {
 
     #[test]
     fn rolling_history_truncates_an_oversized_callback_chunk() {
-        let mut history = RollingSamples::new(4);
+        let history = AtomicRollingSamples::new(4);
         history.push_slice(&[1, 2, 3, 4, 5, 6]);
         assert_eq!(history.snapshot(), vec![3, 4, 5, 6]);
     }
 
     #[test]
     fn rolling_history_snapshots_are_non_destructive() {
-        let mut history = RollingSamples::new(4);
+        let history = AtomicRollingSamples::new(4);
         history.push_slice(&[1, 2, 3, 4]);
         let first = history.snapshot();
         let second = history.snapshot();
@@ -847,7 +975,7 @@ mod tests {
 
     #[test]
     fn rolling_history_clear_resets_and_accepts_new_samples() {
-        let mut history = RollingSamples::new(4);
+        let history = AtomicRollingSamples::new(4);
         history.push_slice(&[1, 2, 3, 4]);
         history.clear();
         assert!(history.snapshot().is_empty());
@@ -856,17 +984,33 @@ mod tests {
     }
 
     #[test]
+    fn rolling_history_snapshots_run_concurrently_with_writes() {
+        let history = Arc::new(AtomicRollingSamples::new(1024));
+        let writer_history = history.clone();
+        let writer = thread::spawn(move || {
+            for chunk in 0..1_000i16 {
+                writer_history.push_slice(&[chunk, chunk + 1, chunk + 2, chunk + 3]);
+            }
+        });
+
+        let reader_history = history.clone();
+        let reader = thread::spawn(move || {
+            for _ in 0..1_000 {
+                assert!(reader_history.snapshot().len() <= 1024);
+            }
+        });
+
+        writer.join().unwrap();
+        reader.join().unwrap();
+    }
+
+    #[test]
     fn recorder_ring_snapshots_and_clear_reset_all_retained_state() {
         let mut recorder = AudioRecorder::new();
         recorder.set_ring_buffer_size(4).unwrap();
 
-        {
-            let mut history = recorder
-                .recorded_history
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            history.push_slice(&[1, 2, 3, 4]);
-        }
+        let history = recorder.rolling_history.load_full().unwrap();
+        history.push_slice(&[1, 2, 3, 4]);
 
         assert_eq!(
             recorder.get_ring_buffer_samples().unwrap(),
@@ -881,11 +1025,7 @@ mod tests {
             vec![1, 2, 3, 4]
         );
 
-        recorder
-            .recorded_history
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push_slice(&[5, 6]);
+        history.push_slice(&[5, 6]);
         assert_eq!(
             recorder.get_ring_buffer_samples().unwrap(),
             vec![3, 4, 5, 6]
@@ -902,22 +1042,15 @@ mod tests {
         recorder.clear();
 
         assert!(recorder
-            .recorded_history
+            .recorded_samples
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .samples
-            .is_empty());
-        assert!(recorder
-            .recorded_history
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .rolling
-            .as_ref()
-            .unwrap()
-            .snapshot()
             .is_empty());
         assert!(recorder.get_ring_buffer_samples().unwrap().is_empty());
         assert_eq!(recorder.get_levels().peak, 0.0);
         assert_eq!(recorder.get_levels().rms, 0.0);
+
+        history.push_slice(&[7, 8]);
+        assert_eq!(recorder.get_ring_buffer_samples().unwrap(), vec![7, 8]);
     }
 }

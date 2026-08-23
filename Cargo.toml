@@ -1,6 +1,6 @@
 [package]
 name = "miniaudio_node"
-version = "1.6.2"
+version = "1.6.3"
 edition = "2021"
 description = "High-performance native audio playback for Node.js and Bun, built with Rust and rodio"
 license = "MIT"
