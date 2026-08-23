@@ -3,11 +3,12 @@
 
 use crate::conversions::convert_channels_f32;
 use crate::input::AudioLevels;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
 use ringbuf::HeapRb;
+use rodio::cpal;
+use rodio::cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -218,7 +219,7 @@ impl AudioPassthrough {
             )
         })?;
 
-        self.sample_rate = input_config.sample_rate();
+        self.sample_rate = input_config.sample_rate().0;
         self.channels = input_config.channels();
 
         // Negotiate the output independently. Input and output devices often
@@ -232,7 +233,7 @@ impl AudioPassthrough {
 
         // Ring-buffer capacity is expressed in output samples because the
         // output callback consumes the converted stream.
-        let samples_per_buffer = (output_config.sample_rate() as u64
+        let samples_per_buffer = (output_config.sample_rate().0 as u64
             * output_config.channels() as u64
             * target_latency as u64
             / 1000) as usize;
@@ -251,9 +252,9 @@ impl AudioPassthrough {
         let last_rms = self.last_rms.clone();
         let on_levels = self.on_levels_callback.clone();
         let converter = Arc::new(Mutex::new(PassthroughConverter::new(
-            input_config.sample_rate(),
+            input_config.sample_rate().0,
             input_config.channels(),
-            output_config.sample_rate(),
+            output_config.sample_rate().0,
             output_config.channels(),
         )));
 
@@ -532,8 +533,7 @@ impl AudioPassthrough {
 
         if let Ok(devices) = host.output_devices() {
             for (i, device) in devices.enumerate() {
-                if let Ok(desc) = device.description() {
-                    let name = desc.name();
+                if let Ok(name) = device.name() {
                     // Skip null/discard devices
                     let name_lower = name.to_lowercase();
                     if name_lower.contains("null") || name_lower.contains("discard") {
@@ -542,12 +542,14 @@ impl AudioPassthrough {
 
                     // Check if this is the default device
                     let is_default = default_device.as_ref().is_some_and(|d| {
-                        d.description().map(|dd| dd.name() == name).unwrap_or(false)
+                        d.name()
+                            .map(|default_name| default_name == name)
+                            .unwrap_or(false)
                     });
 
                     result.push(crate::types::AudioDeviceInfo {
-                        id: format!("{}:{}", host.id(), i),
-                        name: name.to_string(),
+                        id: format!("{:?}:{}", host.id(), i),
+                        name,
                         host: format!("{:?}", host.id()),
                         is_default,
                     });
@@ -562,10 +564,8 @@ impl AudioPassthrough {
     fn get_input_device(&self, host: &cpal::Host, device_id: Option<&str>) -> Result<cpal::Device> {
         match device_id {
             Some(id) => {
-                if id.contains(DEVICE_ID_SEPARATOR) {
-                    let parts: Vec<&str> = id.split(DEVICE_ID_SEPARATOR).collect();
-                    let host_name = parts[0];
-                    let device_idx = parts[1].parse::<usize>().map_err(|_| {
+                if let Some((host_name, index)) = id.split_once(DEVICE_ID_SEPARATOR) {
+                    let device_idx = index.parse::<usize>().map_err(|_| {
                         Error::new(Status::InvalidArg, format!("Invalid device index: {}", id))
                     })?;
 
@@ -592,8 +592,9 @@ impl AudioPassthrough {
                             )
                         })
                 } else {
-                    // Try to parse as index
-                    let idx = id.parse::<usize>().unwrap_or(0);
+                    let idx = id.parse::<usize>().map_err(|_| {
+                        Error::new(Status::InvalidArg, format!("Invalid device ID: {}", id))
+                    })?;
                     host.input_devices()
                         .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?
                         .nth(idx)
@@ -614,10 +615,8 @@ impl AudioPassthrough {
     ) -> Result<cpal::Device> {
         match device_id {
             Some(id) => {
-                if id.contains(DEVICE_ID_SEPARATOR) {
-                    let parts: Vec<&str> = id.split(DEVICE_ID_SEPARATOR).collect();
-                    let host_name = parts[0];
-                    let device_idx = parts[1].parse::<usize>().map_err(|_| {
+                if let Some((host_name, index)) = id.split_once(DEVICE_ID_SEPARATOR) {
+                    let device_idx = index.parse::<usize>().map_err(|_| {
                         Error::new(Status::InvalidArg, format!("Invalid device index: {}", id))
                     })?;
 
@@ -644,7 +643,9 @@ impl AudioPassthrough {
                             )
                         })
                 } else {
-                    let idx = id.parse::<usize>().unwrap_or(0);
+                    let idx = id.parse::<usize>().map_err(|_| {
+                        Error::new(Status::InvalidArg, format!("Invalid device ID: {}", id))
+                    })?;
                     host.output_devices()
                         .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?
                         .nth(idx)

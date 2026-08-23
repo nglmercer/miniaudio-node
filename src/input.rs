@@ -1,9 +1,10 @@
 use crate::buffer::SamplesBuffer;
 use crate::types::AudioDeviceInfo;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
+use rodio::cpal;
+use rodio::cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 type OnDataCallback = Box<dyn Fn(Vec<i16>) + Send + Sync>;
@@ -13,6 +14,7 @@ const DEFAULT_CHANNELS: u16 = 1;
 const DEFAULT_RESERVE_SECONDS: u32 = 10;
 const DEVICE_ID_SEPARATOR: char = ':';
 const I16_MAX_F32: f32 = 32768.0;
+#[cfg(target_os = "linux")]
 const PREFERRED_LINUX_BUFFER_SIZE: u32 = 1024;
 
 pub(crate) fn append_bounded(target: &mut Vec<i16>, data: &[i16], capacity: Option<usize>) {
@@ -85,7 +87,7 @@ fn create_device_info(
     device: &cpal::Device,
     default_name: &Option<String>,
 ) -> Option<AudioDeviceInfo> {
-    let name = device.description().ok()?.name().to_string();
+    let name = device.name().ok()?;
     // Only include devices that actually have a default input config
     if device.default_input_config().is_err() {
         return None;
@@ -118,9 +120,7 @@ pub fn get_input_devices_by_host(host_name: String) -> Result<Vec<AudioDeviceInf
         .input_devices()
         .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
 
-    let default_name = host
-        .default_input_device()
-        .and_then(|d| d.description().ok().map(|desc| desc.name().to_string()));
+    let default_name = host.default_input_device().and_then(|d| d.name().ok());
 
     let result = devices
         .enumerate()
@@ -147,9 +147,7 @@ pub fn get_input_devices() -> Result<Vec<AudioDeviceInfo>> {
             Err(_) => continue,
         };
 
-        let default_name = host
-            .default_input_device()
-            .and_then(|d| d.description().ok().map(|desc| desc.name().to_string()));
+        let default_name = host.default_input_device().and_then(|d| d.name().ok());
 
         for (i, device) in devices.enumerate() {
             if let Some(info) = create_device_info(&host_name, i, &device, &default_name) {
@@ -163,9 +161,7 @@ pub fn get_input_devices() -> Result<Vec<AudioDeviceInfo>> {
         let host = cpal::default_host();
         let host_name = format!("{:?}", host.id());
         if let Ok(devices) = host.input_devices() {
-            let default_name = host
-                .default_input_device()
-                .and_then(|d| d.description().ok().map(|desc| desc.name().to_string()));
+            let default_name = host.default_input_device().and_then(|d| d.name().ok());
             for (i, device) in devices.enumerate() {
                 if let Some(info) = create_device_info(&host_name, i, &device, &default_name) {
                     result.push(info);
@@ -278,10 +274,8 @@ impl AudioRecorder {
 
         let host = cpal::default_host();
         let device = if let Some(id) = device_id {
-            if id.contains(DEVICE_ID_SEPARATOR) {
-                let parts: Vec<&str> = id.split(DEVICE_ID_SEPARATOR).collect();
-                let host_name = parts[0];
-                let device_idx = parts[1].parse::<usize>().map_err(|_| {
+            if let Some((host_name, index)) = id.split_once(DEVICE_ID_SEPARATOR) {
+                let device_idx = index.parse::<usize>().map_err(|_| {
                     Error::new(
                         Status::InvalidArg,
                         format!("Invalid device index in ID: {}", id),
@@ -314,10 +308,14 @@ impl AudioRecorder {
                         )
                     })?
             } else {
-                // Fallback for old numeric IDs or simple IDs
+                // Keep supporting legacy numeric IDs, but reject malformed
+                // values instead of silently selecting device 0.
+                let device_idx = id.parse::<usize>().map_err(|_| {
+                    Error::new(Status::InvalidArg, format!("Invalid device ID: {}", id))
+                })?;
                 host.input_devices()
                     .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?
-                    .nth(id.parse::<usize>().unwrap_or(0))
+                    .nth(device_idx)
                     .ok_or_else(|| {
                         Error::new(Status::InvalidArg, format!("Device ID {} not found", id))
                     })?
@@ -335,7 +333,7 @@ impl AudioRecorder {
             )
         })?;
 
-        self.sample_rate = config.sample_rate();
+        self.sample_rate = config.sample_rate().0;
         self.channels = config.channels();
 
         let recorded_samples = self.recorded_samples.clone();

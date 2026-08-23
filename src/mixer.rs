@@ -1,21 +1,25 @@
 //! Audio mixer - blend multiple audio sources together
 
 use crate::conversions::convert_channels_f32;
+use arc_swap::ArcSwap;
 use napi::{Error, Result, Status};
 use napi_derive::napi;
 use rodio::{OutputStreamBuilder, Sink, Source};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// A mixer that combines multiple audio sources into a single output stream.
 #[napi]
 pub struct Mixer {
-    sources: Arc<Mutex<Vec<MixerSource>>>,
+    // Writers publish a new immutable source snapshot. The realtime output
+    // iterator loads the current snapshot without taking a mutex.
+    sources: Arc<ArcSwap<Vec<MixerSource>>>,
+    source_updates: Mutex<()>,
     max_sources: usize,
     sample_rate: u32,
     channels: u16,
-    volume: Arc<Mutex<f32>>,
+    volume: Arc<AtomicU32>,
     output_stream: Arc<Mutex<Option<rodio::OutputStream>>>,
     sink: Arc<Mutex<Option<Sink>>>,
     is_mixing: Arc<AtomicBool>,
@@ -45,11 +49,14 @@ impl Mixer {
     #[napi(factory)]
     pub fn with_config(sample_rate: u32, channels: u16, max_sources: u32) -> Self {
         Mixer {
-            sources: Arc::new(Mutex::new(Vec::with_capacity(max_sources as usize))),
+            sources: Arc::new(ArcSwap::from_pointee(Vec::with_capacity(
+                max_sources as usize,
+            ))),
+            source_updates: Mutex::new(()),
             max_sources: max_sources as usize,
             sample_rate,
             channels,
-            volume: Arc::new(Mutex::new(1.0)),
+            volume: Arc::new(AtomicU32::new(1.0f32.to_bits())),
             output_stream: Arc::new(Mutex::new(None)),
             sink: Arc::new(Mutex::new(None)),
             is_mixing: Arc::new(AtomicBool::new(false)),
@@ -59,7 +66,11 @@ impl Mixer {
     /// Add an audio source to the mixer.
     #[napi]
     pub fn add_source(&self, source: &MixerSource) -> Result<()> {
-        let mut sources = self.sources.lock().unwrap_or_else(|e| e.into_inner());
+        let _update_guard = self
+            .source_updates
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut sources = self.sources.load_full().as_ref().clone();
         if sources.len() >= self.max_sources {
             return Err(Error::new(
                 Status::GenericFailure,
@@ -67,15 +78,21 @@ impl Mixer {
             ));
         }
         sources.push(source.clone());
+        self.sources.store(Arc::new(sources));
         Ok(())
     }
 
     /// Remove a source by its ID.
     #[napi]
     pub fn remove_source(&self, source_id: String) -> Result<()> {
-        let mut sources = self.sources.lock().unwrap_or_else(|e| e.into_inner());
+        let _update_guard = self
+            .source_updates
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut sources = self.sources.load_full().as_ref().clone();
         if let Some(pos) = sources.iter().position(|s| s.id == source_id) {
             sources.remove(pos);
+            self.sources.store(Arc::new(sources));
             Ok(())
         } else {
             Err(Error::new(Status::InvalidArg, "Source not found"))
@@ -85,37 +102,35 @@ impl Mixer {
     /// Get all current sources.
     #[napi]
     pub fn get_sources(&self) -> Vec<MixerSource> {
-        self.sources
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.sources.load_full().as_ref().clone()
     }
 
     /// Get the number of sources.
     #[napi]
     pub fn get_source_count(&self) -> u32 {
-        self.sources.lock().unwrap_or_else(|e| e.into_inner()).len() as u32
+        self.sources.load().len() as u32
     }
 
     /// Clear all sources.
     #[napi]
     pub fn clear(&self) {
-        self.sources
+        let _update_guard = self
+            .source_updates
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+            .unwrap_or_else(|e| e.into_inner());
+        self.sources.store(Arc::new(Vec::new()));
     }
 
     /// Mix all sources at a specific time point.
     #[napi]
     pub fn sample_at(&self, time_ms: u32) -> Result<Vec<i16>> {
-        let sources = self.sources.lock().unwrap_or_else(|e| e.into_inner());
+        let sources = self.sources.load();
         if sources.is_empty() {
             return Ok(Vec::new());
         }
         Ok(mix_frame(
-            &sources,
-            &self.volume,
+            sources.as_ref(),
+            load_float(&self.volume),
             self.sample_rate,
             self.channels,
             time_ms as f64 / 1000.0,
@@ -132,12 +147,7 @@ impl Mixer {
             ));
         }
 
-        if self
-            .sources
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_empty()
-        {
+        if self.sources.load().is_empty() {
             self.is_mixing.store(false, Ordering::SeqCst);
             return Err(Error::new(Status::InvalidArg, "No sources to mix"));
         }
@@ -232,14 +242,15 @@ impl Mixer {
                 "Volume must be between 0.0 and 1.0",
             ));
         }
-        *self.volume.lock().unwrap_or_else(|e| e.into_inner()) = volume as f32;
+        self.volume
+            .store((volume as f32).to_bits(), Ordering::Relaxed);
         Ok(())
     }
 
     /// Get the master volume.
     #[napi]
     pub fn get_master_volume(&self) -> f64 {
-        *self.volume.lock().unwrap_or_else(|e| e.into_inner()) as f64
+        load_float(&self.volume) as f64
     }
 }
 
@@ -251,9 +262,9 @@ pub struct MixerSource {
     samples: Vec<i16>,
     sample_rate: u32,
     channels: u16,
-    volume: Arc<Mutex<f32>>,
-    pan: Arc<Mutex<f32>>, // -1.0 (left) to 1.0 (right)
-    enabled: Arc<Mutex<bool>>,
+    volume: Arc<AtomicU32>,
+    pan: Arc<AtomicU32>, // -1.0 (left) to 1.0 (right)
+    enabled: Arc<AtomicBool>,
 }
 
 #[napi]
@@ -265,9 +276,9 @@ impl MixerSource {
             samples,
             sample_rate,
             channels,
-            volume: Arc::new(Mutex::new(1.0)),
-            pan: Arc::new(Mutex::new(0.0)),
-            enabled: Arc::new(Mutex::new(true)),
+            volume: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            pan: Arc::new(AtomicU32::new(0.0f32.to_bits())),
+            enabled: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -314,14 +325,15 @@ impl MixerSource {
                 "Volume must be between 0.0 and 1.0",
             ));
         }
-        *self.volume.lock().unwrap_or_else(|e| e.into_inner()) = volume as f32;
+        self.volume
+            .store((volume as f32).to_bits(), Ordering::Relaxed);
         Ok(())
     }
 
     /// Get volume.
     #[napi]
     pub fn get_volume(&self) -> f64 {
-        *self.volume.lock().unwrap_or_else(|e| e.into_inner()) as f64
+        load_float(&self.volume) as f64
     }
 
     /// Set pan (-1.0 left, 0.0 center, 1.0 right).
@@ -333,26 +345,26 @@ impl MixerSource {
                 "Pan must be between -1.0 and 1.0",
             ));
         }
-        *self.pan.lock().unwrap_or_else(|e| e.into_inner()) = pan as f32;
+        self.pan.store((pan as f32).to_bits(), Ordering::Relaxed);
         Ok(())
     }
 
     /// Get pan.
     #[napi]
     pub fn get_pan(&self) -> f64 {
-        *self.pan.lock().unwrap_or_else(|e| e.into_inner()) as f64
+        load_float(&self.pan) as f64
     }
 
     /// Enable or disable source.
     #[napi]
     pub fn set_enabled(&mut self, enabled: bool) {
-        *self.enabled.lock().unwrap_or_else(|e| e.into_inner()) = enabled;
+        self.enabled.store(enabled, Ordering::Relaxed);
     }
 
     /// Check if source is enabled.
     #[napi]
     pub fn is_enabled(&self) -> bool {
-        *self.enabled.lock().unwrap_or_else(|e| e.into_inner())
+        self.enabled.load(Ordering::Relaxed)
     }
 
     /// Get duration in milliseconds.
@@ -394,7 +406,7 @@ fn source_frame_at(source: &MixerSource, time_seconds: f64) -> Option<Vec<f32>> 
 
 fn mix_frame(
     sources: &[MixerSource],
-    master_volume: &Arc<Mutex<f32>>,
+    master_volume: f32,
     sample_rate: u32,
     channels: u16,
     time_seconds: f64,
@@ -406,15 +418,15 @@ fn mix_frame(
 
     let mut mixed = vec![0.0f32; target_channels];
     for source in sources {
-        if !*source.enabled.lock().unwrap_or_else(|e| e.into_inner()) {
+        if !source.enabled.load(Ordering::Relaxed) {
             continue;
         }
         let Some(frame) = source_frame_at(source, time_seconds) else {
             continue;
         };
         let converted = convert_channels_f32(&frame, source.channels, channels);
-        let volume = *source.volume.lock().unwrap_or_else(|e| e.into_inner());
-        let pan = *source.pan.lock().unwrap_or_else(|e| e.into_inner());
+        let volume = load_float(&source.volume);
+        let pan = load_float(&source.pan);
         for (channel, mixed_sample) in mixed.iter_mut().enumerate() {
             let mut gain = volume;
             if target_channels == 2 {
@@ -434,10 +446,9 @@ fn mix_frame(
         }
     }
 
-    let master = *master_volume.lock().unwrap_or_else(|e| e.into_inner());
     mixed
         .into_iter()
-        .map(|sample| sample_to_i16(sample * master))
+        .map(|sample| sample_to_i16(sample * master_volume))
         .collect()
 }
 
@@ -446,8 +457,8 @@ fn sample_to_i16(sample: f32) -> i16 {
 }
 
 struct MixerOutput {
-    sources: Arc<Mutex<Vec<MixerSource>>>,
-    volume: Arc<Mutex<f32>>,
+    sources: Arc<ArcSwap<Vec<MixerSource>>>,
+    volume: Arc<AtomicU32>,
     sample_rate: u32,
     channels: u16,
     is_mixing: Arc<AtomicBool>,
@@ -464,10 +475,10 @@ impl Iterator for MixerOutput {
             return None;
         }
         if self.channel_index >= self.channels as usize {
-            let sources = self.sources.lock().unwrap_or_else(|e| e.into_inner());
+            let sources = self.sources.load();
             self.current_frame = mix_frame_f32(
-                &sources,
-                &self.volume,
+                sources.as_ref(),
+                load_float(&self.volume),
                 self.channels,
                 self.frame_index as f64 / self.sample_rate.max(1) as f64,
             );
@@ -505,22 +516,22 @@ impl Source for MixerOutput {
 
 fn mix_frame_f32(
     sources: &[MixerSource],
-    master_volume: &Arc<Mutex<f32>>,
+    master_volume: f32,
     channels: u16,
     time_seconds: f64,
 ) -> Vec<f32> {
     let target_channels = channels as usize;
     let mut mixed = vec![0.0f32; target_channels];
     for source in sources {
-        if !*source.enabled.lock().unwrap_or_else(|e| e.into_inner()) {
+        if !source.enabled.load(Ordering::Relaxed) {
             continue;
         }
         let Some(frame) = source_frame_at(source, time_seconds) else {
             continue;
         };
         let converted = convert_channels_f32(&frame, source.channels, channels);
-        let volume = *source.volume.lock().unwrap_or_else(|e| e.into_inner());
-        let pan = *source.pan.lock().unwrap_or_else(|e| e.into_inner());
+        let volume = load_float(&source.volume);
+        let pan = load_float(&source.pan);
         for (channel, mixed_sample) in mixed.iter_mut().enumerate() {
             let mut gain = volume;
             if target_channels == 2 {
@@ -539,11 +550,14 @@ fn mix_frame_f32(
             *mixed_sample += converted.get(channel).copied().unwrap_or(0.0) * gain;
         }
     }
-    let master = *master_volume.lock().unwrap_or_else(|e| e.into_inner());
     mixed
         .into_iter()
-        .map(|sample| (sample * master).clamp(-1.0, 1.0))
+        .map(|sample| (sample * master_volume).clamp(-1.0, 1.0))
         .collect()
+}
+
+fn load_float(value: &AtomicU32) -> f32 {
+    f32::from_bits(value.load(Ordering::Relaxed))
 }
 
 /// Create a new mixer instance.

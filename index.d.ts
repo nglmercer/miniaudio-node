@@ -16,7 +16,10 @@ export declare class AudioDecoder {
   reset(): void
   /** Decode all audio samples into a vector */
   decodeToSamples(): Array<number>
-  /** Get a slice of decoded samples (limited by duration to prevent memory issues) */
+  /**
+   * Get a slice of decoded samples without materializing samples outside the
+   * requested interval.
+   */
   decodeSlice(startSeconds: number, endSeconds: number): Array<number>
   /** Check if this is a stereo file */
   isStereo(): boolean

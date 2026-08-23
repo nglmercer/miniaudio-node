@@ -48,13 +48,13 @@ A tag matching `v<major>.<minor>.<patch>` starts the release workflow. Pre-relea
 
 ## Run a manual release
 
-The workflow supports `workflow_dispatch` with a required `version` input:
+The workflow supports `workflow_dispatch` with a required `version` input naming an existing tag:
 
 ```bash
 gh workflow run release.yml -f version=v1.6.3
 ```
 
-The input must be a valid `v`-prefixed semantic version. The workflow derives one `TAG_NAME` value for both the GitHub release and npm package version, so a manual run from `main` does not accidentally publish a package named after the branch.
+The input must be a valid `v`-prefixed semantic version and the tag must already exist. Every job checks out that tag, verifies that Cargo and npm metadata match it, and builds/publishes only that checked-out source. A manual run cannot relabel arbitrary `main` code as the requested version.
 
 ## Required repository configuration
 
@@ -105,7 +105,7 @@ Check the target name and artifact name in the matrix. The expected artifacts ar
 
 ### The package version is wrong
 
-Check the tag or manual `version` input. It must be `vX.Y.Z` (optionally with a pre-release suffix). The workflow strips the leading `v` only when writing `package.json`.
+Check the tag or manual `version` input. It must be an existing `vX.Y.Z` tag (optionally with a pre-release suffix), and both Cargo and npm versions must match it.
 
 ### Native tests fail on a runner
 

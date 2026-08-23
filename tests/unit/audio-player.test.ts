@@ -485,15 +485,38 @@ describe("AudioPlayer", () => {
         await Bun.sleep(120);
         expect(Math.abs(timingPlayer.getCurrentTime() - pausedAt)).toBeLessThan(0.08);
 
+        timingPlayer.seekTo(0.25);
+        expect(timingPlayer.isPlaying()).toBe(false);
+        expect(timingPlayer.getState()).toBe(PlaybackState.Paused);
+        expect(timingPlayer.getCurrentTime()).toBeGreaterThanOrEqual(0.24);
+
         timingPlayer.play();
         await Bun.sleep(120);
-        expect(timingPlayer.getCurrentTime()).toBeGreaterThan(pausedAt + 0.02);
+        expect(timingPlayer.getCurrentTime()).toBeGreaterThan(0.27);
 
         timingPlayer.seekTo(0.5);
         expect(timingPlayer.getCurrentTime()).toBeGreaterThanOrEqual(0.49);
         expect(timingPlayer.getCurrentTime()).toBeLessThan(0.6);
       } finally {
         timingPlayer.stop();
+      }
+    });
+
+    it("reconciles state after a source reaches EOF", async () => {
+      if (!isAudioSystemAvailable()) {
+        console.warn("Skipping test: Audio system not available");
+        return;
+      }
+
+      const eofPlayer = new AudioPlayer();
+      try {
+        eofPlayer.loadBuffer(makeSilenceWav(80));
+        eofPlayer.play();
+        await Bun.sleep(180);
+        expect(eofPlayer.isPlaying()).toBe(false);
+        expect(eofPlayer.getState()).toBe(PlaybackState.Stopped);
+      } finally {
+        eofPlayer.stop();
       }
     });
   });

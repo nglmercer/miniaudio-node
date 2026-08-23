@@ -14,7 +14,7 @@ name = "miniaudio_node"
 napi = { version = "3.12.2", features = ["napi4"] }
 napi-derive = "3.6.3"
 rodio = { version = "0.21.1", features = ["wav", "mp3", "flac", "vorbis"] }
-cpal = "0.17.1"
+arc-swap = "1.7"
 base64 = "0.22"
 rand = "0.9"
 ringbuf = "0.4"

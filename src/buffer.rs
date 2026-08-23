@@ -79,10 +79,8 @@ impl SamplesBuffer {
     pub fn play(&self) -> napi::Result<()> {
         use rodio::{OutputStreamBuilder, Sink, Source};
 
-        let stream = OutputStreamBuilder::open_default_stream()
-            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))?;
+        use std::sync::mpsc;
 
-        let sink = Sink::connect_new(stream.mixer());
         let samples_i16 = self
             .samples
             .lock()
@@ -138,24 +136,44 @@ impl SamplesBuffer {
             }
         }
 
-        let source = VecSource {
-            samples: samples_f32,
-            index: 0,
-            sample_rate: self.sample_rate,
-            channels: self.channels,
-        };
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let sample_rate = self.sample_rate;
+        let channels = self.channels;
 
-        sink.append(source);
-        sink.play();
-
-        // Keep the stream and sink alive on a detached worker so a long buffer
-        // does not block the JavaScript/Bun thread for its full duration.
+        // CoreAudio's output stream owns a non-Send property-listener callback.
+        // Create and retain the stream entirely inside the worker instead of
+        // moving it across the thread boundary.
         std::thread::spawn(move || {
+            let stream = match OutputStreamBuilder::open_default_stream() {
+                Ok(stream) => stream,
+                Err(error) => {
+                    let _ = ready_tx.send(Err(error.to_string()));
+                    return;
+                }
+            };
+            let sink = Sink::connect_new(stream.mixer());
+            let source = VecSource {
+                samples: samples_f32,
+                index: 0,
+                sample_rate,
+                channels,
+            };
+            sink.append(source);
+            sink.play();
+            let _ = ready_tx.send(Ok(()));
             sink.sleep_until_end();
             drop(stream);
         });
 
-        Ok(())
+        ready_rx
+            .recv()
+            .map_err(|_| {
+                napi::Error::new(
+                    napi::Status::GenericFailure,
+                    "Audio playback worker exited before starting",
+                )
+            })?
+            .map_err(|error| napi::Error::new(napi::Status::GenericFailure, error))
     }
 }
 

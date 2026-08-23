@@ -55,7 +55,7 @@ setTimeout(() => player.pause(), 5_000);
 
 ## Supported formats
 
-The default decoder reports support for WAV, MP3, FLAC, OGG/Vorbis, AAC, and M4A. Opus is not enabled by the default Rodio decoder features and is therefore not reported as supported.
+The default decoder reports support for WAV, MP3, FLAC, and OGG/Vorbis. AAC, M4A, and Opus are not enabled by the default Rodio decoder features and are therefore not reported as supported.
 
 ## Development
 

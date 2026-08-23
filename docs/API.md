@@ -21,8 +21,8 @@ The generated [`index.d.ts`](../index.d.ts) is the authoritative reference for e
 | `getState()` | Return `Stopped`, `Loaded`, `Playing`, or `Paused`. |
 | `getCurrentTime()` | Return the current position in seconds using a monotonic playback clock. |
 | `getDuration()` | Return the loaded duration in seconds. |
-| `getCurrentFile()` | Return the loaded file path, or `null` for buffer input. |
-| `getDevices()` | List available output devices. |
+| `getCurrentFile()` | Return the loaded file path, or a synthetic `__BUFFER__...` identifier for buffer input. |
+| `getDevices()` | List available output devices; returns an empty array when enumeration finds none. |
 
 Example:
 
@@ -42,7 +42,7 @@ if (player.getState() === PlaybackState.Playing) {
 
 ### Supported formats and metadata
 
-`getSupportedFormats()` and `isFormatSupported(format)` report WAV, MP3, FLAC, OGG/Vorbis, AAC, and M4A for the default decoder configuration. Opus is not enabled by the default Rodio feature set.
+`getSupportedFormats()` and `isFormatSupported(format)` report WAV, MP3, FLAC, and OGG/Vorbis for the default decoder configuration. AAC, M4A, and Opus are not enabled by the default Rodio feature set.
 
 `getAudioMetadata(path)` returns the decoded duration. `title`, `artist`, and `album` are optional and are not currently extracted from tags.
 
@@ -65,6 +65,8 @@ recorder.stop();
 ```
 
 `setRingBufferSize()` bounds the retained history in samples. When the limit is reached, new samples replace the oldest samples. `getBuffer()` returns the retained samples as a `SamplesBuffer`; `clear()` removes the retained history. `setOnData()` receives incoming sample chunks, and `getLevels()` reports peak and RMS levels.
+
+Pass a device ID returned by `getInputDevices()` to `start(deviceId)`. Malformed or unknown IDs are rejected; they never fall back to the first input device.
 
 ### `AudioPassthrough`
 
@@ -120,6 +122,8 @@ const preview = decoder.decodeSlice(0, 5);
 ```
 
 The builder applies requested sample-rate and channel conversions while decoding. `setLoopEnabled()` and `setLoopCount()` configure `buildLooped()`. A finite loop count can be materialized with `decodeLooped()`; an infinite loop cannot be represented by a finite array and returns an error.
+
+`decodeSlice()` skips and decodes only the requested time window. Materialized slices and finite loop results are capped at 100,000,000 interleaved samples; requests over that limit return an error before an oversized allocation is attempted.
 
 ### `SamplesBuffer`
 
@@ -198,7 +202,7 @@ The package exports white, pink, blue, violet, brownian, velvet, and triangular 
 
 Other utilities include:
 
-- `initializeAudio()` and `getAudioInfo()` for basic audio-system information.
+- `initializeAudio()` and `getAudioInfo()` for the current default output device, format, channel count, and sample rate.
 - `getAvailableHosts()`, `getInputDevices()`, and `getInputDevicesByHost()` for input enumeration.
 - `dbToLinear()` and `linearToDb()` for gain conversion.
 - `testTone(frequency, durationMs)` for a non-blocking sine-wave test tone.

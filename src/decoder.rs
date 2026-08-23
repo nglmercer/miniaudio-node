@@ -7,6 +7,22 @@ use rodio::{Decoder, Source};
 use std::fs::File;
 use std::io::{BufReader, Cursor};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+/// Keep materialized decoder results large enough for normal use while
+/// preventing accidental multi-gigabyte allocations from public loop APIs.
+pub(crate) const MAX_DECODED_SAMPLES: usize = 100_000_000;
+
+fn collect_source_slice<S: Source<Item = f32>>(
+    source: S,
+    start_seconds: f64,
+    duration_seconds: f64,
+) -> Vec<f32> {
+    source
+        .skip_duration(Duration::from_secs_f64(start_seconds))
+        .take_duration(Duration::from_secs_f64(duration_seconds))
+        .collect()
+}
 
 /// Decoder for audio files in various formats (WAV, MP3, FLAC, OGG, etc.)
 #[napi]
@@ -195,7 +211,8 @@ impl AudioDecoder {
             .collect())
     }
 
-    /// Get a slice of decoded samples (limited by duration to prevent memory issues)
+    /// Get a slice of decoded samples without materializing samples outside the
+    /// requested interval.
     #[napi]
     pub fn decode_slice(&self, start_seconds: f64, end_seconds: f64) -> Result<Vec<i16>> {
         if !start_seconds.is_finite()
@@ -209,22 +226,76 @@ impl AudioDecoder {
                 "Slice bounds must be finite, non-negative, and ordered",
             ));
         }
-        let mut samples = self.decode_to_samples()?;
-        let start_idx = (start_seconds * self.sample_rate as f64 * self.channels as f64) as usize;
-        let end_idx = (end_seconds * self.sample_rate as f64 * self.channels as f64) as usize;
-        let end_idx = end_idx.min(samples.len());
 
-        if start_idx >= samples.len() {
+        // A known duration lets us return immediately without opening or
+        // decoding a source when the requested range is past EOF.
+        if self.duration > 0.0 && start_seconds >= self.duration {
             return Ok(Vec::new());
         }
 
-        if start_idx >= end_idx {
-            return Ok(Vec::new());
+        let duration_seconds = end_seconds - start_seconds;
+        let estimated_samples = duration_seconds * self.sample_rate as f64 * self.channels as f64;
+        if !estimated_samples.is_finite() || estimated_samples > MAX_DECODED_SAMPLES as f64 {
+            return Err(Error::new(
+                Status::InvalidArg,
+                format!(
+                    "Requested slice exceeds the {} sample safety limit",
+                    MAX_DECODED_SAMPLES
+                ),
+            ));
+        }
+        if start_seconds > u64::MAX as f64 || duration_seconds > u64::MAX as f64 {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Slice bounds are too large to represent safely",
+            ));
         }
 
-        samples.drain(end_idx..);
-        samples.drain(..start_idx);
-        Ok(samples)
+        // `skip_duration` and `take_duration` operate on the decoder's source
+        // stream, so decoding stops at the end of the requested interval.
+        // Channel conversion and resampling happen only for that bounded
+        // window, rather than for the entire file.
+        let source_samples = if let Some(file_path) = &self.file_path {
+            let file = File::open(file_path).map_err(|e| {
+                Error::new(Status::InvalidArg, format!("Failed to open file: {}", e))
+            })?;
+            let source = Decoder::new(BufReader::new(file)).map_err(|e| {
+                Error::new(Status::InvalidArg, format!("Failed to decode audio: {}", e))
+            })?;
+            collect_source_slice(source, start_seconds, duration_seconds)
+        } else {
+            let data_guard = self.data.lock().unwrap_or_else(|e| e.into_inner());
+            let data = data_guard
+                .as_ref()
+                .ok_or_else(|| Error::new(Status::InvalidArg, "No audio data to decode"))?;
+            let source = Decoder::new(Cursor::new(data.clone())).map_err(|e| {
+                Error::new(Status::InvalidArg, format!("Failed to decode audio: {}", e))
+            })?;
+            collect_source_slice(source, start_seconds, duration_seconds)
+        };
+
+        let channel_converted =
+            convert_channels_f32(&source_samples, self.source_channels, self.channels);
+        let converted = resample_f32(
+            &channel_converted,
+            self.source_sample_rate,
+            self.sample_rate,
+            self.channels,
+        );
+        if converted.len() > MAX_DECODED_SAMPLES {
+            return Err(Error::new(
+                Status::InvalidArg,
+                format!(
+                    "Requested slice exceeds the {} sample safety limit",
+                    MAX_DECODED_SAMPLES
+                ),
+            ));
+        }
+        Ok(converted
+            .into_iter()
+            .map(|sample| sample.clamp(-1.0, 1.0) * 32767.0)
+            .map(|sample| sample.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16)
+            .collect())
     }
 
     /// Check if this is a stereo file
@@ -292,11 +363,6 @@ impl LoopedDecoder {
     /// a finite vector and returns an error.
     #[napi]
     pub fn decode_looped(&self) -> Result<Vec<i16>> {
-        let samples = self.decoder.decode_to_samples()?;
-        if samples.is_empty() || self.loop_count == 1 {
-            return Ok(samples);
-        }
-
         if self.loop_count == u32::MAX {
             return Err(Error::new(
                 Status::InvalidArg,
@@ -305,7 +371,50 @@ impl LoopedDecoder {
         }
         let loop_count = self.loop_count;
 
-        let mut result = Vec::with_capacity(samples.len() * loop_count as usize);
+        // Reject obviously oversized requests using decoder metadata before
+        // decoding a potentially long source into memory.
+        if self.decoder.duration > 0.0 {
+            let estimated_single_loop = self.decoder.duration
+                * self.decoder.sample_rate as f64
+                * self.decoder.channels as f64;
+            if !estimated_single_loop.is_finite()
+                || estimated_single_loop > MAX_DECODED_SAMPLES as f64 / loop_count.max(1) as f64
+            {
+                return Err(Error::new(
+                    Status::InvalidArg,
+                    format!(
+                        "Requested looped audio exceeds the {} sample safety limit",
+                        MAX_DECODED_SAMPLES
+                    ),
+                ));
+            }
+        }
+
+        let samples = self.decoder.decode_to_samples()?;
+        if samples.is_empty() || loop_count == 1 {
+            return Ok(samples);
+        }
+
+        let capacity = samples
+            .len()
+            .checked_mul(loop_count as usize)
+            .ok_or_else(|| {
+                Error::new(
+                    Status::InvalidArg,
+                    "Requested loop count exceeds the addressable sample capacity",
+                )
+            })?;
+        if capacity > MAX_DECODED_SAMPLES {
+            return Err(Error::new(
+                Status::InvalidArg,
+                format!(
+                    "Requested looped audio exceeds the {} sample safety limit",
+                    MAX_DECODED_SAMPLES
+                ),
+            ));
+        }
+
+        let mut result = Vec::with_capacity(capacity);
         for _ in 0..loop_count {
             result.extend_from_slice(&samples);
         }

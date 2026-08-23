@@ -1,7 +1,8 @@
 use base64::{engine::general_purpose, Engine as _};
-use cpal::traits::{DeviceTrait, HostTrait};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
+use rodio::cpal;
+use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
 use std::fs::File;
 use std::io::{BufReader, Cursor};
@@ -40,9 +41,9 @@ impl PlaybackClock {
         self.interval_started_at = None;
     }
 
-    fn seek(&mut self, position: f64, now: Instant) {
+    fn seek(&mut self, position: f64, now: Instant, playing: bool) {
         self.position = position;
-        self.interval_started_at = Some(now);
+        self.interval_started_at = playing.then_some(now);
     }
 
     fn current(&self, now: Instant, duration: f64) -> f64 {
@@ -136,13 +137,11 @@ impl AudioPlayer {
                 Err(_) => continue,
             };
 
-            let default_name = host
-                .default_output_device()
-                .and_then(|d| d.description().ok().map(|desc| desc.name().to_string()));
+            let default_name = host.default_output_device().and_then(|d| d.name().ok());
 
             for (i, device) in devices.enumerate() {
-                let name = match device.description() {
-                    Ok(desc) => desc.name().to_string(),
+                let name = match device.name() {
+                    Ok(name) => name,
                     Err(_) => continue,
                 };
                 result.push(AudioDeviceInfo {
@@ -152,17 +151,6 @@ impl AudioPlayer {
                     is_default: Some(name) == default_name,
                 });
             }
-        }
-
-        // Fallback so callers always get at least one entry even when
-        // enumeration fails (e.g. no audio hardware in a container).
-        if result.is_empty() {
-            result.push(AudioDeviceInfo {
-                id: "default".to_string(),
-                name: "Default Output Device".to_string(),
-                host: "default".to_string(),
-                is_default: true,
-            });
         }
 
         Ok(result)
@@ -309,7 +297,12 @@ impl AudioPlayer {
 
         // Start a new clock only for a fresh playback or a resume. Calling
         // play() while already playing is intentionally idempotent.
-        let current_state = self.state.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let current_state = self.reconcile_state();
+        let position_before_play = self
+            .clock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .position;
         let sink_is_empty = self
             .sink
             .lock()
@@ -317,8 +310,8 @@ impl AudioPlayer {
             .as_ref()
             .map(|sink| sink.empty())
             .unwrap_or(true);
-        let starts_new_track = current_state == PlaybackState::Loaded
-            || current_state == PlaybackState::Stopped
+        let starts_new_track = current_state == PlaybackState::Stopped
+            || (current_state == PlaybackState::Loaded && position_before_play <= f64::EPSILON)
             || (current_state == PlaybackState::Playing && sink_is_empty);
         if current_state != PlaybackState::Playing || starts_new_track {
             self.clock
@@ -326,6 +319,11 @@ impl AudioPlayer {
                 .unwrap_or_else(|e| e.into_inner())
                 .start(Instant::now(), starts_new_track);
         }
+        let source_position = if current_state == PlaybackState::Loaded && !starts_new_track {
+            position_before_play
+        } else {
+            0.0
+        };
 
         // Always ensure sink is available - recreate if needed
         let sink_needs_source = {
@@ -383,7 +381,13 @@ impl AudioPlayer {
                     } else {
                         44100
                     };
-                    let source = rodio::buffer::SamplesBuffer::new(channels, sample_rate, samples);
+                    let skip_samples =
+                        buffer_skip_samples(sample_rate, channels, source_position, samples.len());
+                    let source = rodio::buffer::SamplesBuffer::new(
+                        channels,
+                        sample_rate,
+                        samples[skip_samples..].to_vec(),
+                    );
                     sink.append(source);
                 } else if let Some(file_path) = &self.current_file {
                     debug_log!("Playing from file: {}", file_path);
@@ -399,7 +403,9 @@ impl AudioPlayer {
                             format!("Failed to decode file '{}': {}", file_path, e),
                         )
                     })?;
-                    sink.append(source);
+                    sink.append(
+                        source.skip_duration(std::time::Duration::from_secs_f64(source_position)),
+                    );
                 }
             } else {
                 debug_log!("Resuming paused audio");
@@ -417,7 +423,7 @@ impl AudioPlayer {
     #[napi]
     pub fn pause(&mut self) -> Result<()> {
         debug_log!("Pause called");
-        let current_state = self.state.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let current_state = self.reconcile_state();
 
         // If already paused or stopped with no sink, just update state
         if current_state == PlaybackState::Paused {
@@ -523,16 +529,31 @@ impl AudioPlayer {
 
     #[napi]
     pub fn is_playing(&self) -> bool {
-        if let Some(sink) = self.sink.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            !sink.is_paused() && !sink.empty()
-        } else {
-            false
+        self.reconcile_state() == PlaybackState::Playing
+    }
+
+    fn reconcile_state(&self) -> PlaybackState {
+        let sink_empty = self
+            .sink
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|sink| sink.empty())
+            .unwrap_or(true);
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if *state == PlaybackState::Playing && sink_empty {
+            let duration = *self.duration.lock().unwrap_or_else(|e| e.into_inner());
+            let mut clock = self.clock.lock().unwrap_or_else(|e| e.into_inner());
+            clock.position = duration;
+            clock.interval_started_at = None;
+            *state = PlaybackState::Stopped;
         }
+        state.clone()
     }
 
     #[napi]
     pub fn get_state(&self) -> PlaybackState {
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.reconcile_state()
     }
 
     #[napi]
@@ -542,6 +563,7 @@ impl AudioPlayer {
 
     #[napi]
     pub fn get_current_time(&self) -> Result<f64> {
+        self.reconcile_state();
         let duration = *self.duration.lock().unwrap_or_else(|e| e.into_inner());
         Ok(self
             .clock
@@ -564,6 +586,12 @@ impl AudioPlayer {
             return Err(Error::new(
                 Status::InvalidArg,
                 "Position must be a valid finite number",
+            ));
+        }
+        if position > u64::MAX as f64 {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Position is too large to represent safely",
             ));
         }
 
@@ -593,59 +621,41 @@ impl AudioPlayer {
             return Err(Error::new(Status::InvalidArg, "No audio loaded"));
         }
 
-        // Stop current playback without clearing source info
-        {
-            let sink_guard = self.sink.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(sink) = sink_guard.as_ref() {
-                sink.stop();
-            }
+        // Reconcile EOF before capturing the pre-seek state. Seeking must
+        // preserve whether the track was playing, paused, or merely loaded.
+        let previous_state = self.reconcile_state();
+
+        // Stop the old sink without clearing the loaded source information.
+        if let Some(sink) = self.sink.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            sink.stop();
         }
         *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackState::Stopped;
-        debug_log!("Sink stopped for seek");
+        *self.output_stream.lock().unwrap_or_else(|e| e.into_inner()) = None;
 
-        // Recreate output stream and sink only if needed
-        {
-            let output_stream_guard = self.output_stream.lock().unwrap_or_else(|e| e.into_inner());
-            let sink_guard = self.sink.lock().unwrap_or_else(|e| e.into_inner());
-
-            if sink_guard.is_none() || output_stream_guard.is_none() {
-                drop(sink_guard);
-                drop(output_stream_guard);
-
-                let stream = OutputStreamBuilder::open_default_stream().map_err(|e| {
-                    debug_log!("Failed to create output stream for seek: {}", e);
-                    Error::new(
-                        Status::GenericFailure,
-                        format!("Failed to create output stream: {}", e),
-                    )
-                })?;
-
-                let sink_new = Sink::connect_new(stream.mixer());
-                *self.output_stream.lock().unwrap_or_else(|e| e.into_inner()) = Some(stream);
-                *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(sink_new);
-                debug_log!("Output stream and sink recreated for seek");
-            }
-        }
-
-        // Create source with skip and append to sink
-        let sink_guard = self.sink.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(sink) = sink_guard.as_ref() {
+        let needs_output = matches!(
+            previous_state,
+            PlaybackState::Playing | PlaybackState::Paused
+        );
+        if needs_output {
+            let stream = OutputStreamBuilder::open_default_stream().map_err(|e| {
+                debug_log!("Failed to create output stream for seek: {}", e);
+                Error::new(
+                    Status::GenericFailure,
+                    format!("Failed to create output stream: {}", e),
+                )
+            })?;
+            let sink = Sink::connect_new(stream.mixer());
             let volume = *self.volume.lock().unwrap_or_else(|e| e.into_inner());
             sink.set_volume(volume);
 
-            // Check decoded buffer samples first: buffer-loaded players carry
-            // a synthetic "__BUFFER__..." current_file that cannot be opened.
+            // Buffer-loaded players carry a synthetic "__BUFFER__..." file
+            // identifier, so prefer their decoded PCM over reopening a path.
             if let Some(samples) = self
                 .audio_samples
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .clone()
             {
-                // Buffer content is stored as decoded PCM, so seeking is a
-                // simple sample-offset skip using the real format of the
-                // loaded content (TTS audio is commonly mono and not
-                // 44100 Hz, e.g. 22050 Hz pcm_s16le).
                 let channels = if self.buffer_channels > 0 {
                     self.buffer_channels
                 } else {
@@ -658,7 +668,6 @@ impl AudioPlayer {
                 };
                 let skip_samples =
                     buffer_skip_samples(sample_rate, channels, position, samples.len());
-
                 let source = rodio::buffer::SamplesBuffer::new(
                     channels,
                     sample_rate,
@@ -670,38 +679,36 @@ impl AudioPlayer {
                     position
                 );
             } else if let Some(ref file_path) = self.current_file {
-                let path = Path::new(file_path);
-                let file = File::open(path).map_err(|e| {
+                let file = File::open(Path::new(file_path)).map_err(|e| {
                     Error::new(
                         Status::GenericFailure,
                         format!("Failed to reopen file: {}", e),
                     )
                 })?;
-
-                let reader = BufReader::new(file);
-                let decoder = Decoder::new(reader).map_err(|e| {
+                let decoder = Decoder::new(BufReader::new(file)).map_err(|e| {
                     Error::new(
                         Status::GenericFailure,
                         format!("Failed to create decoder: {}", e),
                     )
                 })?;
-
-                // Skip to the desired position
-                let skip_duration = std::time::Duration::from_secs_f64(position);
-                let source = decoder.skip_duration(skip_duration);
-                sink.append(source);
+                sink.append(decoder.skip_duration(std::time::Duration::from_secs_f64(position)));
                 debug_log!("File source appended with skip to position: {}s", position);
             }
 
-            sink.play();
-            self.clock
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .seek(position, Instant::now());
-            *self.state.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackState::Playing;
-            debug_log!("Seek complete, playing from position: {}s", position);
+            if previous_state == PlaybackState::Playing {
+                sink.play();
+            }
+            *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(sink);
+            *self.output_stream.lock().unwrap_or_else(|e| e.into_inner()) = Some(stream);
         }
 
+        self.clock.lock().unwrap_or_else(|e| e.into_inner()).seek(
+            position,
+            Instant::now(),
+            previous_state == PlaybackState::Playing,
+        );
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = previous_state;
+        debug_log!("Seek complete at position: {}s", position);
         Ok(())
     }
 }

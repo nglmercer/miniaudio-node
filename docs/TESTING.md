@@ -29,7 +29,7 @@ Bun tests exercise the generated JavaScript API, validation, file and buffer loa
 bun test
 ```
 
-Tests that need a physical input or output device check audio-system availability first. When the host has no usable audio system, those tests are reported as skipped rather than counted as hardware coverage. A passing local run in a desktop environment therefore does not prove that every platform's device backend behaves identically.
+The hardware-oriented suites check audio-system availability first. When the host has no usable audio system, those cases are reported as skipped rather than counted as hardware coverage. The always-run `tests/unit/deterministic.test.ts` suite covers loading, validation, decoding, state, and allocation guards without a device, so headless CI still executes meaningful tests.
 
 Run a focused file when iterating:
 
@@ -82,9 +82,9 @@ When adding a hardware-dependent test:
 
 ## CI and release checks
 
-The regular CI matrix builds all six published native targets and runs Bun tests on host-native artifacts where the runner can execute them. Cross-compiled Linux arm64 and Windows ia32 artifacts are build-checked but are not executed on incompatible runners.
+The regular CI matrix builds all six published native targets and runs a Node.js smoke test plus the deterministic suite on host-native artifacts where the runner can execute them. It then runs the hardware-oriented suites, which may skip device cases on headless runners. Cross-compiled Linux arm64 and Windows ia32 artifacts are build-checked but are not executed on incompatible runners.
 
-The release workflow first runs format, Clippy, Rust tests, and TypeScript quality gates. It then builds the same six targets and runs Bun tests on the configured host-native release artifacts before packaging them. See [Publishing](PUBLISH.md) for the release sequence and [Platform support](PLATFORM_SUPPORT.md) for the exact matrix.
+The release workflow first runs format, Clippy, Rust tests, and TypeScript quality gates. It then builds the same six targets and runs Node.js plus deterministic and hardware-oriented Bun tests on the configured host-native release artifacts before packaging them. See [Publishing](PUBLISH.md) for the release sequence and [Platform support](PLATFORM_SUPPORT.md) for the exact matrix.
 
 ## Coverage expectations
 

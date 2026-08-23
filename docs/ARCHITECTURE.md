@@ -49,7 +49,7 @@ Converters operate on complete frames. The sample-rate converter computes a frac
 
 ## Device and stream ownership
 
-Rodio output streams must remain alive for the lifetime of their sinks. The player, stream, passthrough, and mixer therefore retain their native output stream handles alongside the playback state. Input and output device configurations are negotiated separately; passthrough conversion bridges their sample-rate and channel differences.
+Rodio output streams must remain alive for the lifetime of their sinks. The player, stream, passthrough, and mixer therefore retain their native output stream handles alongside the playback state. Input and output device configurations are negotiated separately; passthrough conversion bridges their sample-rate and channel differences. The realtime mixer reads immutable source snapshots and atomic per-source controls, so JavaScript-side source updates do not require mutex acquisition on the audio callback path.
 
 Long-running playback and recording state is held behind synchronization primitives or native atomics. JavaScript methods control that state without keeping a JavaScript event-loop callback active for the duration of playback. `SamplesBuffer.play()` and `testTone()` start native playback and return promptly.
 

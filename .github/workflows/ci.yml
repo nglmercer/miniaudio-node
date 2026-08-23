@@ -187,7 +187,7 @@ jobs:
           fi
           test -s "${{ matrix.artifact }}"
 
-      - name: Run Node.js tests
+      - name: Run Node.js smoke test
         if: matrix.run_tests
         shell: bash
         run: |
@@ -201,7 +201,24 @@ jobs:
           export NAPI_RS_NATIVE_LIBRARY_PATH="$(pwd)/${{ matrix.artifact }}"
           echo "Linking native library from: $NAPI_RS_NATIVE_LIBRARY_PATH"
 
-          bun test
+          node -e "const m = require('./index.js'); if (!m.AudioPlayer || !Array.isArray(m.getSupportedFormats())) process.exit(1); const p = new m.AudioPlayer(); if (p.getState() !== m.PlaybackState.Stopped) process.exit(1); console.log('Node.js native module smoke test passed')"
+
+      - name: Run deterministic tests
+        if: matrix.run_tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          export NAPI_RS_NATIVE_LIBRARY_PATH="$(pwd)/${{ matrix.artifact }}"
+          bun test tests/unit/deterministic.test.ts --reporter=junit --reporter-outfile=deterministic-junit.xml
+          node scripts/assert-junit-tests.js deterministic-junit.xml 1
+
+      - name: Run hardware-dependent tests
+        if: matrix.run_tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          export NAPI_RS_NATIVE_LIBRARY_PATH="$(pwd)/${{ matrix.artifact }}"
+          bun run test:hardware
 
       - name: Prepare artifact for upload
         shell: bash

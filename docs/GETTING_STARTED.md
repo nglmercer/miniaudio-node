@@ -38,11 +38,11 @@ console.log(player.getCurrentTime()); // seconds
 ```typescript
 player.pause();
 player.play();       // resume
-player.seekTo(30);   // seek to 30 seconds
+player.seekTo(30);   // seek to 30 seconds; preserves the paused/playing state
 player.stop();
 ```
 
-Positions are expressed in seconds. `seekTo()` validates the position and clamps it to the loaded track where appropriate.
+Positions are expressed in seconds. `seekTo()` validates the position, clamps it to the loaded track where appropriate, and preserves whether playback was paused or playing. Seeking a loaded track does not start playback.
 
 ## Load a buffer or Base64 audio
 
@@ -107,7 +107,7 @@ console.log(isFormatSupported("mp3"));
 console.log(getInputDevices());
 ```
 
-`AudioPlayer.getDevices()` lists output devices. Input devices are available through `getInputDevices()` and `AudioRecorder`/`AudioPassthrough` helpers.
+`AudioPlayer.getDevices()` lists output devices and may return an empty array when no output device is available. Input devices are available through `getInputDevices()` and `AudioRecorder`/`AudioPassthrough` helpers.
 
 ## Handle errors
 

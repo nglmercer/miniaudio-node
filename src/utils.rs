@@ -1,7 +1,8 @@
 use crate::types::{AudioMetadata, DEBUG_ENABLED};
-use cpal::traits::{DeviceTrait, HostTrait};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
+use rodio::cpal;
+use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
 use std::fs::File;
 use std::io::BufReader;
@@ -57,8 +58,6 @@ pub fn get_supported_formats() -> Vec<String> {
         "mp3".to_string(),
         "flac".to_string(),
         "ogg".to_string(),
-        "aac".to_string(),
-        "m4a".to_string(),
     ]
 }
 
@@ -69,38 +68,71 @@ pub fn is_format_supported(format: String) -> bool {
 
 #[napi]
 pub fn get_audio_info() -> Result<String> {
-    Ok("Audio system: rodio\nDefault device: Default Output Device\nChannels: Stereo\nSample rate: 44100".to_string())
+    let host = cpal::default_host();
+    let host_name = format!("{:?}", host.id());
+    let device = host.default_output_device().ok_or_else(|| {
+        Error::new(
+            Status::GenericFailure,
+            format!("No default audio output device found for {}", host_name),
+        )
+    })?;
+    let device_name = device
+        .name()
+        .unwrap_or_else(|_| "<unnamed output device>".to_string());
+    let config = device.default_output_config().map_err(|error| {
+        Error::new(
+            Status::GenericFailure,
+            format!("Failed to query default output device: {}", error),
+        )
+    })?;
+
+    Ok(format!(
+        "Audio system: rodio\nHost: {}\nDefault device: {}\nChannels: {}\nSample rate: {}\nSample format: {:?}",
+        host_name,
+        device_name,
+        config.channels(),
+        config.sample_rate().0,
+        config.sample_format()
+    ))
 }
 
 /// Start a sine-wave test tone without blocking the JavaScript thread.
 #[napi]
 pub fn test_tone(frequency: f64, duration_ms: u32) -> Result<()> {
     use rodio::source::SineWave;
+    use std::sync::mpsc;
 
-    let stream = OutputStreamBuilder::open_default_stream().map_err(|e| {
-        Error::new(
-            Status::GenericFailure,
-            format!("Failed to create stream: {}", e),
-        )
-    })?;
+    let (ready_tx, ready_rx) = mpsc::channel();
 
-    let mixer = stream.mixer();
-    let sink = Sink::connect_new(mixer);
-
-    let source = SineWave::new(frequency as f32)
-        .take_duration(Duration::from_millis(duration_ms as u64))
-        .amplify(0.3);
-
-    sink.append(source);
-
-    // Keep playback alive without blocking the N-API call for the requested
-    // duration. Errors opening the stream are still reported synchronously.
+    // Keep the CoreAudio stream on the worker that creates it. The stream is
+    // deliberately never moved into a second thread after construction.
     std::thread::spawn(move || {
+        let stream = match OutputStreamBuilder::open_default_stream() {
+            Ok(stream) => stream,
+            Err(error) => {
+                let _ = ready_tx.send(Err(error.to_string()));
+                return;
+            }
+        };
+        let sink = Sink::connect_new(stream.mixer());
+        let source = SineWave::new(frequency as f32)
+            .take_duration(Duration::from_millis(duration_ms as u64))
+            .amplify(0.3);
+        sink.append(source);
+        let _ = ready_tx.send(Ok(()));
         sink.sleep_until_end();
         drop(stream);
     });
 
-    Ok(())
+    ready_rx
+        .recv()
+        .map_err(|_| {
+            Error::new(
+                Status::GenericFailure,
+                "Audio playback worker exited before starting",
+            )
+        })?
+        .map_err(|error| Error::new(Status::GenericFailure, error))
 }
 
 #[napi]

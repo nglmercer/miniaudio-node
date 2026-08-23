@@ -29,6 +29,34 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref }}
+
+      - name: Verify release ref and versions
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG"
+            exit 1
+          fi
+          if ! git tag --points-at HEAD | grep -Fxq "$RELEASE_TAG"; then
+            echo "Checked-out commit is not tagged $RELEASE_TAG"
+            exit 1
+          fi
+          export RELEASE_VERSION="${RELEASE_TAG#v}"
+          node <<'NODE'
+          const fs = require('node:fs')
+          const expected = process.env.RELEASE_VERSION
+          const packageVersion = JSON.parse(fs.readFileSync('package.json', 'utf8')).version
+          const cargoText = fs.readFileSync('Cargo.toml', 'utf8')
+          const cargoVersion = cargoText.match(/^version\s*=\s*"([^"]+)"/m)?.[1]
+          if (packageVersion !== expected || cargoVersion !== expected) {
+            throw new Error(`Version mismatch: tag=${expected}, package=${packageVersion}, cargo=${cargoVersion}`)
+          }
+          console.log(`Release ref ${process.env.RELEASE_TAG} is checked out with version ${expected}`)
+          NODE
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -118,6 +146,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -208,7 +238,7 @@ jobs:
           fi
           test -s "${{ matrix.artifact }}"
 
-      - name: Run release tests
+      - name: Run Node.js smoke test
         if: matrix.run_tests
         shell: bash
         run: |
@@ -217,7 +247,24 @@ jobs:
             exit 1
           fi
           export NAPI_RS_NATIVE_LIBRARY_PATH="$(pwd)/${{ matrix.artifact }}"
-          bun test
+          node -e "const m = require('./index.js'); if (!m.AudioPlayer || !Array.isArray(m.getSupportedFormats())) process.exit(1); const p = new m.AudioPlayer(); if (p.getState() !== m.PlaybackState.Stopped) process.exit(1); console.log('Node.js native module smoke test passed')"
+
+      - name: Run deterministic tests
+        if: matrix.run_tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          export NAPI_RS_NATIVE_LIBRARY_PATH="$(pwd)/${{ matrix.artifact }}"
+          bun test tests/unit/deterministic.test.ts --reporter=junit --reporter-outfile=deterministic-junit.xml
+          node scripts/assert-junit-tests.js deterministic-junit.xml 1
+
+      - name: Run hardware-dependent tests
+        if: matrix.run_tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          export NAPI_RS_NATIVE_LIBRARY_PATH="$(pwd)/${{ matrix.artifact }}"
+          bun run test:hardware
 
       - name: Prepare artifact
         shell: bash
@@ -249,6 +296,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref }}
 
       - name: Determine Tag
         id: tag_info
@@ -312,15 +361,11 @@ jobs:
           ls -l package/
 
           VERSION="${TAG_NAME#v}"
-          echo "Setting version to $VERSION"
-          export PACKAGE_VERSION="$VERSION"
-          node <<'NODE'
-          const fs = require('fs')
-          const packagePath = 'package/package.json'
-          const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
-          packageJson.version = process.env.PACKAGE_VERSION
-          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`)
-          NODE
+          PACKAGE_VERSION=$(node -p "require('./package/package.json').version")
+          if [[ "$PACKAGE_VERSION" != "$VERSION" ]]; then
+            echo "Package version $PACKAGE_VERSION does not match release tag $TAG_NAME"
+            exit 1
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
