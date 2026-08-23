@@ -880,7 +880,13 @@ impl AudioRecorder {
             }
         };
 
+        // CoreAudio may invoke the first input callback before `play()`
+        // returns. Publish the active state first so that callback is not
+        // discarded; synchronous callers cannot observe this transient state,
+        // and the failure path resets it before returning.
+        self.is_recording.store(true, Ordering::SeqCst);
         if let Err(error) = stream.play() {
+            self.is_recording.store(false, Ordering::SeqCst);
             self.stop_on_data_worker();
             return Err(Error::new(
                 Status::GenericFailure,
@@ -889,7 +895,6 @@ impl AudioRecorder {
         }
 
         self.stream = Some(stream);
-        self.is_recording.store(true, Ordering::SeqCst);
 
         Ok(())
     }

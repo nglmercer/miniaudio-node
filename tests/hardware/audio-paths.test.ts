@@ -89,14 +89,18 @@ describe("hardware audio paths", () => {
 
     try {
       recorder.start(inputDeviceId);
-      await Bun.sleep(120);
+      // CoreAudio startup latency varies substantially on hosted Apple
+      // Silicon runners. Keep capture active while waiting for the first
+      // callback instead of dropping the stream after a fixed short delay.
+      const deadline = Date.now() + 3_000;
+      while (callbackCount === 0 && Date.now() < deadline) {
+        await Bun.sleep(25);
+      }
+      expect(callbackCount).toBeGreaterThan(0);
+      expect(sampleCount).toBeGreaterThan(0);
     } finally {
       recorder.stop();
     }
-
-    await Bun.sleep(20);
-    expect(callbackCount).toBeGreaterThan(0);
-    expect(sampleCount).toBeGreaterThan(0);
   });
 
   inputIt("opens and closes the native passthrough path", async () => {
