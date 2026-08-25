@@ -72,8 +72,10 @@ The publish job copies these files into a temporary package directory:
 ```text
 package/
 ├── package.json
-├── index.js
+├── index.cjs
+├── index.mjs
 ├── index.d.ts
+├── index.d.mts
 ├── README.md
 ├── LICENSE
 └── *.node

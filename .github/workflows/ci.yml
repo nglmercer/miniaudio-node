@@ -171,7 +171,8 @@ jobs:
         run: |
           set -euo pipefail
           echo "Building for target: ${{ matrix.target }}"
-          bunx napi build --platform --release --target ${{ matrix.target }}
+          bunx napi build --platform --release --target ${{ matrix.target }} --js index.cjs --dts index.d.ts
+          bunx napi build --platform --release --target ${{ matrix.target }} --esm --js index.mjs --dts index.d.mts
 
       - name: Normalize native module artifact
         shell: bash
@@ -201,7 +202,8 @@ jobs:
           export NAPI_RS_NATIVE_LIBRARY_PATH="$(pwd)/${{ matrix.artifact }}"
           echo "Linking native library from: $NAPI_RS_NATIVE_LIBRARY_PATH"
 
-          node -e "const m = require('./index.js'); if (!m.AudioPlayer || !Array.isArray(m.getSupportedFormats())) process.exit(1); const p = new m.AudioPlayer(); if (p.getState() !== m.PlaybackState.Stopped) process.exit(1); console.log('Node.js native module smoke test passed')"
+          node -e "const m = require('./index.cjs'); if (!m.AudioPlayer || !Array.isArray(m.getSupportedFormats())) process.exit(1); const p = new m.AudioPlayer(); if (p.getState() !== m.PlaybackState.Stopped) process.exit(1); console.log('Node.js native module smoke test passed')"
+          node --input-type=module -e "const m = await import('./index.mjs'); if (!m.AudioPlayer || !Array.isArray(m.getSupportedFormats())) process.exit(1); const p = new m.AudioPlayer(); if (p.getState() !== m.PlaybackState.Stopped) process.exit(1); console.log('Node.js ESM binding smoke test passed')"
 
       - name: Run deterministic tests
         if: matrix.run_tests

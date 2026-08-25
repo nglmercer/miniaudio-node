@@ -41,12 +41,13 @@ For an unoptimized development build:
 bun run build:debug
 ```
 
-The N-API CLI generates the native `.node` artifact, `index.js` loader, and `index.d.ts` declarations. The repository does not require a custom loader patch step after the build; use the CLI's target and platform arguments directly.
+The N-API CLI generates the native `.node` artifact, `index.cjs`/`index.mjs` loaders, and `index.d.ts`/`index.d.mts` declarations. The repository does not require a custom loader patch step after the build; use the CLI's target and platform arguments directly. Both bindings must be generated: `--js`/`--dts` are CLI-only flags with no `.napirc.json` equivalent, so a bare `napi build --platform` falls back to emitting `index.js`.
 
 To build a particular target locally:
 
 ```bash
-bunx napi build --platform --release --target x86_64-unknown-linux-gnu
+bunx napi build --platform --release --target x86_64-unknown-linux-gnu --js index.cjs --dts index.d.ts
+bunx napi build --platform --release --target x86_64-unknown-linux-gnu --esm --js index.mjs --dts index.d.mts
 ```
 
 Only build targets listed in [Platform support](PLATFORM_SUPPORT.md) are published by the release workflow.
@@ -88,7 +89,7 @@ The combined project scripts are:
 
 The Rust code is split by responsibility instead of placing the complete implementation in `src/lib.rs`. See [Architecture](ARCHITECTURE.md) and [Project structure](PROJECT_STRUCTURE.md) before adding a new module.
 
-Generated files should normally be refreshed by `bun run build` rather than edited manually. The package entry point is `index.js`, and the generated public declarations are in `index.d.ts`.
+Generated files should normally be refreshed by `bun run build` rather than edited manually. The package entry points are `index.cjs` (CommonJS) and `index.mjs` (ESM), selected through the `exports` map; the generated public declarations are in `index.d.ts` and `index.d.mts`.
 
 ## Adding a feature
 
@@ -103,4 +104,4 @@ Hardware-dependent tests should clearly identify their device requirement. See [
 
 ## Pull requests
 
-Keep pull requests focused, include the verification commands you ran, and document platform-specific limitations. Changes to the public API should update `index.d.ts` through generation and should be reflected in [API](API.md) and the [changelog](CHANGELOG.md).
+Keep pull requests focused, include the verification commands you ran, and document platform-specific limitations. Changes to the public API should update `index.d.ts` and `index.d.mts` through generation and should be reflected in [API](API.md) and the [changelog](CHANGELOG.md).

@@ -1,4 +1,4 @@
-import type { StreamOutputConfig, SupportedStreamConfig } from "../../index.js";
+import type { StreamOutputConfig, SupportedStreamConfig } from "../../index.mjs";
 
 const sampleRate = 48_000;
 const channels = 2;

@@ -7,7 +7,7 @@
  */
 
 // Import the native module and types using Bun's ESM import syntax
-import { AudioPlayer, PlaybackState, AudioPlayerConfig } from "../index.js";
+import { AudioPlayer, PlaybackState, AudioPlayerConfig } from "../index.mjs";
 
 // Example 1: Load audio from a buffer
 function loadFromBuffer(): void {

@@ -56,7 +56,7 @@ console.log(supportedOutputConfigs());
 
 ## Checking the selected binary
 
-The generated `index.js` chooses a native `.node` file from the package according to the current platform and architecture. If module loading fails:
+The generated `index.cjs` and `index.mjs` loaders each choose a native `.node` file from the package according to the current platform and architecture. If module loading fails:
 
 1. Confirm `process.platform` and `process.arch` match one of the rows above.
 2. Confirm the installed package contains the corresponding `.node` artifact.

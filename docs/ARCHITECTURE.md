@@ -8,7 +8,7 @@ MiniAudio Node is a native N-API module. JavaScript and TypeScript call generate
 JavaScript / TypeScript
         │
         ▼
-Generated N-API bindings (index.js, index.d.ts)
+Generated N-API bindings (index.cjs, index.mjs, index.d.ts, index.d.mts)
         │
         ▼
 Rust public modules and exported classes

@@ -8,8 +8,8 @@
  * 4. Get device properties
  */
 
-import { AudioPlayer, initializeAudio } from "../index.js";
-import type { AudioDeviceInfo } from "../index.js";
+import { AudioPlayer, initializeAudio } from "../index.mjs";
+import type { AudioDeviceInfo } from "../index.mjs";
 
 class DeviceManager {
   private player: AudioPlayer;

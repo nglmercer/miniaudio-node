@@ -1,6 +1,6 @@
 # API guide
 
-The generated [`index.d.ts`](../index.d.ts) is the authoritative reference for exact TypeScript signatures. This guide groups the API by use case and explains the behavior that is easiest to miss.
+The generated [`index.d.ts`](../index.d.ts) (and its ESM twin [`index.d.mts`](../index.d.mts)) is the authoritative reference for exact TypeScript signatures. This guide groups the API by use case and explains the behavior that is easiest to miss.
 
 ## Core playback
 

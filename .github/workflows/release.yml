@@ -32,6 +32,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref }}
+          fetch-depth: 0
 
       - name: Verify release ref and versions
         env:
@@ -223,7 +224,8 @@ jobs:
         run: |
           set -euo pipefail
           echo "Building for target: ${{ matrix.target }}"
-          bunx napi build --platform --release --target ${{ matrix.target }}
+          bunx napi build --platform --release --target ${{ matrix.target }} --js index.cjs --dts index.d.ts
+          bunx napi build --platform --release --target ${{ matrix.target }} --esm --js index.mjs --dts index.d.mts
 
       - name: Normalize native module artifact
         shell: bash
@@ -248,7 +250,8 @@ jobs:
             exit 1
           fi
           export NAPI_RS_NATIVE_LIBRARY_PATH="$(pwd)/${{ matrix.artifact }}"
-          node -e "const m = require('./index.js'); if (!m.AudioPlayer || !Array.isArray(m.getSupportedFormats())) process.exit(1); const p = new m.AudioPlayer(); if (p.getState() !== m.PlaybackState.Stopped) process.exit(1); console.log('Node.js native module smoke test passed')"
+          node -e "const m = require('./index.cjs'); if (!m.AudioPlayer || !Array.isArray(m.getSupportedFormats())) process.exit(1); const p = new m.AudioPlayer(); if (p.getState() !== m.PlaybackState.Stopped) process.exit(1); console.log('Node.js native module smoke test passed')"
+          node --input-type=module -e "const m = await import('./index.mjs'); if (!m.AudioPlayer || !Array.isArray(m.getSupportedFormats())) process.exit(1); const p = new m.AudioPlayer(); if (p.getState() !== m.PlaybackState.Stopped) process.exit(1); console.log('Node.js ESM binding smoke test passed')"
 
       - name: Run deterministic tests
         if: matrix.run_tests
@@ -340,7 +343,7 @@ jobs:
         run: |
           mkdir -p package
 
-          for file in package.json index.js index.d.ts README.md LICENSE; do
+          for file in package.json index.cjs index.mjs index.d.ts index.d.mts README.md LICENSE; do
             if [[ ! -f "$file" ]]; then
               echo "Required package file is missing: $file"
               exit 1

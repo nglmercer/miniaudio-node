@@ -27,9 +27,9 @@
     "url": "https://github.com/nglmercer/miniaudio-node/issues"
   },
   "scripts": {
-    "build": "napi build --platform --release",
-    "build:debug": "napi build --platform",
-    "build:watch": "napi build --watch",
+    "build": "napi build --platform --release --js index.cjs --dts index.d.ts && napi build --platform --release --esm --js index.mjs --dts index.d.mts",
+    "build:debug": "napi build --platform --js index.cjs --dts index.d.ts && napi build --platform --esm --js index.mjs --dts index.d.mts",
+    "build:watch": "napi build --watch --platform --js index.cjs --dts index.d.ts",
     "test": "bun test",
     "test:deterministic": "bun test tests/unit/deterministic.test.ts",
     "test:hardware": "bun test tests/hardware/audio-paths.test.ts tests/unit/audio-player.test.ts tests/integration/playback.test.ts",
@@ -44,13 +44,30 @@
     "examples:device": "bun ./examples/device-management.ts",
     "examples:playlist": "bun ./examples/playlist.ts"
   },
-  "main": "index.js",
+  "main": "index.cjs",
+  "module": "index.mjs",
   "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./index.d.mts",
+        "default": "./index.mjs"
+      },
+      "require": {
+        "types": "./index.d.ts",
+        "default": "./index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
-    "index.js",
+    "index.cjs",
+    "index.mjs",
     "index.d.ts",
+    "index.d.mts",
     "*.node",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "devDependencies": {
     "@napi-rs/cli": "^3.8.6",

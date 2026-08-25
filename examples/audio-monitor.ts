@@ -13,7 +13,7 @@
  * Press Ctrl+C to exit
  */
 
-import { getInputDevices, AudioRecorder, AudioPlayer, PlaybackState } from "../index.js";
+import { getInputDevices, AudioRecorder, AudioPlayer, PlaybackState } from "../index.mjs";
 import {
   analyzeAudio,
   createLevelBar,
