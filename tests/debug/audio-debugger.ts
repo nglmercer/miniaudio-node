@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { AudioPlayer, initializeAudio, getSupportedFormats, setDebug } from '../../index.js';
+import { AudioPlayer, initializeAudio, getSupportedFormats, setDebug } from '../../index.mjs';
 
 setDebug(true);
 

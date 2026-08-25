@@ -1,4 +1,4 @@
-import { getAvailableHosts, getInputDevicesByHost, AudioRecorder } from "../index.js";
+import { getAvailableHosts, getInputDevicesByHost, AudioRecorder } from "../index.mjs";
 
 const colors = {
   reset: "\x1b[0m",

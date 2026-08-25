@@ -12,7 +12,7 @@
 const SHOW_DEVICES = false;
 // ========================================================
 
-import { AudioPassthrough } from "../index.js";
+import { AudioPassthrough } from "../index.mjs";
 import {
   createLevelBar,
   formatDuration,

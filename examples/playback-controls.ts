@@ -2,7 +2,7 @@
  * Playback Controls - Pause, Resume, Seek demo
  */
 
-import { AudioPlayer, AudioDecoder, setDebug } from "../index.js";
+import { AudioPlayer, AudioDecoder, setDebug } from "../index.mjs";
 /*
 const initResult = initializeAudio();
 console.log({initResult});

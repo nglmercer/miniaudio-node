@@ -6,7 +6,7 @@
  */
 
 // Import the native module and types
-import { AudioPlayer, initializeAudio, getSupportedFormats } from "../index.js";
+import { AudioPlayer, initializeAudio, getSupportedFormats } from "../index.mjs";
 
 // Import苎 kinds of audio file paths for different platforms
 function getPlatformSoundPaths(): string[] {

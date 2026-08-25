@@ -24,7 +24,7 @@ const {
   getSupportedFormats,
   isDebugEnabled,
   setDebug,
-} = await import("../../index.js");
+} = await import("../../index.mjs");
 
 function makeSilenceWav(
   durationMs: number,

@@ -45,8 +45,10 @@ miniaudio-node/
 │   └── utils/                 # Platform and audio-system helpers
 ├── Cargo.toml                 # Rust crate and native dependencies
 ├── Cargo.lock                 # Locked Rust dependency versions
-├── index.d.ts                 # Generated TypeScript declarations
-├── index.js                   # Generated N-API platform loader
+├── index.d.ts                 # Generated TypeScript declarations (CommonJS)
+├── index.d.mts                # Generated TypeScript declarations (ESM)
+├── index.cjs                  # Generated N-API platform loader (CommonJS)
+├── index.mjs                  # Generated N-API platform loader (ESM)
 ├── LICENSE                    # Package license
 ├── package.json               # npm metadata and scripts
 └── README.md                  # Documentation index
@@ -56,8 +58,8 @@ miniaudio-node/
 
 `src/lib.rs` re-exports the public Rust modules so N-API generates a flat JavaScript API. The build produces:
 
-- `index.js`, which selects the native binary for the current platform and architecture;
-- `index.d.ts`, which describes the generated public API;
+- `index.cjs` and `index.mjs`, which select the native binary for the current platform and architecture for CommonJS and ESM consumers respectively;
+- `index.d.ts` and `index.d.mts`, which describe the generated public API;
 - a platform-specific `.node` binary.
 
 The npm package includes those generated files, the license, and the README. The published native matrix is documented in [Platform support](PLATFORM_SUPPORT.md).
@@ -79,7 +81,7 @@ Add behavior tests next to the relevant Rust module when the behavior is determi
 
 ## Generated files
 
-Do not hand-edit `index.js` or `index.d.ts` for normal API changes. Add or update the Rust N-API definitions and run:
+Do not hand-edit `index.cjs`, `index.mjs`, `index.d.ts`, or `index.d.mts` for normal API changes. Add or update the Rust N-API definitions and run:
 
 ```bash
 bun run build

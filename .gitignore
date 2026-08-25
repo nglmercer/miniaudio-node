@@ -139,3 +139,6 @@ package-lock.json
 bun.lock
 *.json
 recording.wav
+
+# Stray CJS binding from a bare `napi build --platform` (use the --js flag)
+/index.js

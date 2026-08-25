@@ -1,4 +1,4 @@
-import { getInputDevices, AudioRecorder } from "../index.js";
+import { getInputDevices, AudioRecorder } from "../index.mjs";
 import { writeFileSync } from "fs";
 import { toWav } from "./utils/audio.js";
 // ANSI colors for better UI

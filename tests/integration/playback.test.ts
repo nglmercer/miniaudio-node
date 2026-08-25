@@ -16,9 +16,9 @@ const {
   getAudioMetadata,
   PlaybackState,
   setDebug,
-} = await import("../../index.js");
+} = await import("../../index.mjs");
 
-import type { AudioDeviceInfo, AudioPlayerConfig } from "../../index.js";
+import type { AudioDeviceInfo, AudioPlayerConfig } from "../../index.mjs";
 import {
   PLATFORM,
   getTestAudioFiles,

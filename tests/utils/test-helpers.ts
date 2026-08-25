@@ -87,7 +87,7 @@ export function getFirstTestAudioFile(): string | null {
  */
 export function safeInitializeAudio(): string | null {
   try {
-    const { initializeAudio } = require('../../index.js')
+    const { initializeAudio } = require('../../index.cjs')
     const result = initializeAudio()
     return result
   } catch (error) {
@@ -101,7 +101,7 @@ export function safeInitializeAudio(): string | null {
  */
 export function isAudioSystemAvailable(): boolean {
   try {
-    const { initializeAudio, getSupportedFormats } = require('../../index.js')
+    const { initializeAudio, getSupportedFormats } = require('../../index.cjs')
     initializeAudio()
     const formats = getSupportedFormats()
     return Array.isArray(formats) && formats.length > 0

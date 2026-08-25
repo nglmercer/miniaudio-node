@@ -5,7 +5,7 @@ const {
   AudioPlayer,
   AudioRecorder,
   getInputDevices,
-} = await import("../../index.js");
+} = await import("../../index.mjs");
 import {
   isAudioSystemAvailable,
   REQUIRE_AUDIO_HARDWARE,
